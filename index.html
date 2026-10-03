@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NPB 日本職棒賽程戰績</title>
+<meta name="description" content="日本職棒（NPB）各年度賽程、比分、戰績與單場球員數據">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="#/">
+    <span class="brand-mark">NPB</span>
+    <span class="brand-text">日本職棒賽程戰績</span>
+  </a>
+  <label class="season-pick">
+    <span>年度</span>
+    <select id="season"></select>
+  </label>
+</header>
+
+<nav class="tabs" id="tabs">
+  <a data-tab="schedule">賽程</a>
+  <a data-tab="standings">戰績</a>
+  <a data-tab="postseason">季後賽</a>
+  <a data-tab="players">個人成績</a>
+  <a data-tab="teams">球隊</a>
+</nav>
+
+<main id="app"><p class="empty">載入中…</p></main>
+
+<dialog id="game-dialog">
+  <div class="dlg-head">
+    <span id="dlg-title"></span>
+    <button class="dlg-close" aria-label="關閉" onclick="closeGame()">✕</button>
+  </div>
+  <div id="dlg-body"></div>
+</dialog>
+
+<footer class="foot">
+  資料來源：<a href="https://npb.jp/" target="_blank" rel="noopener">日本野球機構 NPB.jp</a>
+  ・ <span id="updated"></span>
+</footer>
+<script src="assets/app.js"></script>
+</body>
+</html>
