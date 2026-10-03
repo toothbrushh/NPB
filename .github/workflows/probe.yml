@@ -1,0 +1,20 @@
+name: probe-npb
+on:
+  workflow_dispatch:
+  push:
+    branches: [claude/japan-baseball-schedule-stats-rca6tz]
+    paths: [scraper/probe.py, .github/workflows/probe.yml]
+permissions:
+  contents: write
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scraper/probe.py
+      - run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add debug
+          git commit -m "Add npb.jp sample pages (probe)" || exit 0
+          git push
