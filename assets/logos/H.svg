@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-label="H">
+<circle cx="50" cy="50" r="48" fill="#F5C700"/>
+<circle cx="50" cy="50" r="42" fill="#111111"/>
+<path d="M22 28 Q34 50 22 72 M78 28 Q66 50 78 72" fill="none" stroke="#F5C700" stroke-width="2" stroke-dasharray="3 3" opacity=".55"/>
+<text x="50" y="50" dy=".35em" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-weight="900" font-style="italic" font-size="50" fill="#F5C700">H</text>
+</svg>

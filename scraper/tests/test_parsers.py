@@ -41,7 +41,7 @@ BOX = """
 <h3>巨人</h3>
 <table><tr><th>打順</th><th>位置</th><th>選手</th><th>打数</th><th>得点</th><th>安打</th><th>打点</th></tr>
 <tr><td>1</td><td>(中)</td><td>丸</td><td>4</td><td>1</td><td>2</td><td>0</td></tr>
-<tr><td>4</td><td>(三)</td><td>岡本</td><td>4</td><td>1</td><td>1</td><td>2</td></tr>
+<tr><td>4</td><td>(三)</td><td><a href="/bis/players/11615137.html">岡本</a></td><td>4</td><td>1</td><td>1</td><td>2</td></tr>
 <tr><td></td><td></td><td>計</td><td>8</td><td>2</td><td>3</td><td>2</td></tr>
 </table>
 <h3>阪神</h3>
@@ -57,6 +57,16 @@ BOX = """
 <table><tr><th></th><th>投手</th><th>投球回</th><th>投球数</th><th>打者</th><th>被安打</th><th>三振</th><th>四球</th><th>失点</th><th>自責点</th></tr>
 <tr><td>●</td><td>村上</td><td>8</td><td>100</td><td>30</td><td>8</td><td>6</td><td>1</td><td>3</td><td>3</td></tr>
 </table>
+</body></html>
+"""
+
+
+PROFILE = """
+<html><head><title>岡本 和真（読売ジャイアンツ） | 個人年度別成績 | NPB.jp 日本野球機構</title></head>
+<body><img src="/img/common/logo.png"><h1>岡本 和真</h1><p>おかもと・かずま</p>
+<img src="/img/player/no/11615137.jpg">
+<table><tr><th>ポジション</th><td>内野手</td></tr><tr><th>背番号</th><td>25</td></tr>
+<tr><th>投打</th><td>右投右打</td></tr><tr><th>生年月日</th><td>1996年6月30日</td></tr></table>
 </body></html>
 """
 
@@ -107,6 +117,17 @@ class BoxTest(unittest.TestCase):
         self.assertEqual(g["batting"]["rows"][1][2], "岡本")
         self.assertEqual(self.box["teams"]["T"]["batting"]["rows"][0][2], "近本")
         self.assertEqual(self.box["teams"]["T"]["pitching"]["rows"][0][1], "村上")
+
+    def test_player_ids(self):
+        self.assertEqual(self.box["teams"]["G"]["batting"]["pids"], [None, "11615137", None])
+
+    def test_profile(self):
+        p = s.parse_profile(PROFILE, "11615137")
+        self.assertEqual(p["fullName"], "岡本 和真")
+        self.assertEqual(p["kana"], "おかもと・かずま")
+        self.assertEqual((p["number"], p["position"]), ("25", "内野手"))
+        self.assertEqual(p["photo"], "https://npb.jp/img/player/no/11615137.jpg")
+        self.assertEqual(p["fields"]["投打"], "右投右打")
 
     def test_innings(self):
         self.assertEqual(s.innings_to_outs("7 2/3"), 23)

@@ -332,6 +332,7 @@ def find_venue(text):
 BAT_KEYS = ["打数", "AB"]
 PIT_KEYS = ["投球回", "IP", "回数", "投球数", "NP"]
 TOTAL_NAMES = {"計", "合計", "チーム計", "Totals", "Total", "TOTAL", "TOTALS"}
+PLAYER_LINK_RE = re.compile(r"/bis/(?:eng/)?players/(\d+)\.html")
 
 
 def table_rows(table):
@@ -350,7 +351,14 @@ def table_rows(table):
                 span = 1
             out.append(txt)
             out.extend([""] * (min(span, 30) - 1))
-        rows.append((out, all(c.name == "th" for c in cells)))
+        # 選手連結 → npb.jp 選手 ID（用於選手頁、照片、個人資料）
+        pid = None
+        for a in tr.find_all("a", href=True):
+            m = PLAYER_LINK_RE.search(a["href"])
+            if m:
+                pid = m.group(1)
+                break
+        rows.append((out, all(c.name == "th" for c in cells), pid))
     return rows
 
 
@@ -359,12 +367,12 @@ def is_header(row, keys):
 
 
 def split_table(rows, keys):
-    """回傳 (表頭, 資料列)。"""
-    for i, (row, _) in enumerate(rows):
+    """回傳 (表頭, 資料列, 各列選手 ID)。"""
+    for i, (row, _, _) in enumerate(rows):
         if is_header(row, keys):
-            data = [r for r, is_th in rows[i + 1:] if any(r) and not is_header(r, keys)]
-            return row, data
-    return None, []
+            body = [(r, pid) for r, _, pid in rows[i + 1:] if any(r) and not is_header(r, keys)]
+            return row, [r for r, _ in body], [pid for _, pid in body]
+    return None, [], []
 
 
 def team_near(table):
@@ -388,10 +396,10 @@ def team_near(table):
 
 def parse_linescore(table):
     rows = table_rows(table)
-    for i, (row, _) in enumerate(rows):
+    for i, (row, _, _) in enumerate(rows):
         nums = [c for c in row if re.fullmatch(r"\d{1,2}", c)]
         if nums[:3] == ["1", "2", "3"] and any(c in ("計", "R", "得点") for c in row):
-            data = [r for r, _ in rows[i + 1:i + 3] if any(r)]
+            data = [r for r, _, _ in rows[i + 1:i + 3] if any(r)]
             return {"headers": row, "rows": data}
     return None
 
@@ -411,25 +419,25 @@ def parse_box(html, game):
     bat_tables, pit_tables = [], []
     for t in leaves:
         rows = table_rows(t)
-        flat = [c for r, _ in rows for c in r]
+        flat = [c for r, _, _ in rows for c in r]
         if box["linescore"] is None:
             ls = parse_linescore(t)
             if ls:
                 box["linescore"] = ls
                 continue
         if any(k in flat for k in BAT_KEYS):
-            h, d = split_table(rows, BAT_KEYS)
+            h, d, ids = split_table(rows, BAT_KEYS)
             if h and d:
-                bat_tables.append((t, h, d))
+                bat_tables.append((t, h, d, ids))
         elif any(k in flat for k in PIT_KEYS):
-            h, d = split_table(rows, PIT_KEYS)
+            h, d, ids = split_table(rows, PIT_KEYS)
             if h and d:
-                pit_tables.append((t, h, d))
+                pit_tables.append((t, h, d, ids))
 
     order = [game["away"], game["home"]]  # 慣例：先攻（客隊）在前
     for kind, tables in (("batting", bat_tables), ("pitching", pit_tables)):
         used = set()
-        for idx, (t, h, d) in enumerate(tables):
+        for idx, (t, h, d, ids) in enumerate(tables):
             code = team_near(t)
             if code not in order or code in used:
                 code = next((c for c in order if c not in used), None) if idx < 2 else None
@@ -437,6 +445,8 @@ def parse_box(html, game):
                 continue
             used.add(code)
             box["teams"][code][kind] = {"headers": h, "rows": d}
+            if any(ids):
+                box["teams"][code][kind]["pids"] = ids
 
     info = box["info"]
     m = re.search(r"([\d,]{3,})\s*人", text) or re.search(r"(?:入場者数?|Att(?:endance)?\.?)\s*[:：]?\s*([\d,]+)", text)
@@ -546,8 +556,18 @@ PIT_STATS = {"G": None, "OUTS": None, "H": ("被安打", "安打", "H"), "R": ("
              "W": None, "L": None, "SV": None}
 
 
+BAT_LOG = ["AB", "R", "H", "RBI", "HR", "BB", "SO", "SB"]
+PIT_LOG = ["OUTS", "H", "R", "ER", "BB", "SO", "NP"]
+
+
+def player_key(pid, team, name):
+    """有 npb.jp 選手 ID 就用 ID，否則用「隊伍_姓名」。"""
+    return pid if pid else f"{team}_{re.sub(r'[^0-9A-Za-z一-鿿ぁ-んァ-ヿ々ー]', '', name)}"
+
+
 def build_players(year, games):
-    bat, pit = {}, {}
+    """累計年度個人成績，並輸出每位選手的逐場紀錄 data/{年}/players/{key}.json。"""
+    bat, pit, logs = {}, {}, {}
     gdir = os.path.join(DATA, str(year), "games")
     for g in games:
         if g["stage"] != "regular" or not g.get("hasBox"):
@@ -557,52 +577,175 @@ def build_players(year, games):
             continue
         info = box.get("info", {})
         for team, t in box.get("teams", {}).items():
+            opp = g["home"] if team == g["away"] else g["away"]
+            ha = "A" if team == g["away"] else "H"
             b = t.get("batting")
             if b and b.get("headers"):
-                h, rows = b["headers"], b["rows"]
+                h, rows, pids = b["headers"], b["rows"], b.get("pids") or []
                 ni = name_col(h, rows)
                 idx = {k: (col(h, *v) if v else None) for k, v in BAT_STATS.items()}
-                for r in rows:
+                for ri, r in enumerate(rows):
                     nm = clean(r[ni] if ni < len(r) else "").lstrip("()（）")
                     if not nm or nm in TOTAL_NAMES or re.fullmatch(r"[\d\s]+", nm):
                         continue
-                    p = bat.setdefault(f"{team}|{nm}", {"team": team, "name": nm, **{k: 0 for k in BAT_STATS}})
+                    pid = pids[ri] if ri < len(pids) else None
+                    key = player_key(pid, team, nm)
+                    p = bat.setdefault(key, {"key": key, "id": pid, "team": team, "name": nm,
+                                             **{k: 0 for k in BAT_STATS}})
+                    p["team"] = team
                     p["G"] += 1
+                    line = {k: 0 for k in BAT_LOG}
                     for k, i in idx.items():
                         if i is not None and i < len(r):
                             p[k] += num(r[i])
+                            if k in line:
+                                line[k] = num(r[i])
+                    lg = logs.setdefault(key, {"key": key, "id": pid, "name": nm, "team": team, "bat": [], "pit": []})
+                    lg["bat"].append([g["id"], g["date"], opp, ha] + [line[k] for k in BAT_LOG])
             for pt in [t["pitching"]] if t.get("pitching") else []:
-                h, rows = pt["headers"], pt["rows"]
+                h, rows, pids = pt["headers"], pt["rows"], pt.get("pids") or []
                 ni = name_col(h, rows, pitching=True)
                 ip_i = col(h, "投球回", "IP", "回数")
                 idx = {k: (col(h, *v) if v else None) for k, v in PIT_STATS.items()}
-                for r in rows:
+                for ri, r in enumerate(rows):
                     nm = clean(r[ni] if ni < len(r) else "")
                     if not nm or nm in TOTAL_NAMES:
                         continue
                     nm_plain = re.sub(r"^(?:[○●◯△]\s*|[勝敗SHＳＨ]\s+)|\s*[(（].*$", "", nm).strip()
-                    p = pit.setdefault(f"{team}|{nm_plain}", {"team": team, "name": nm_plain, **{k: 0 for k in PIT_STATS}})
+                    pid = pids[ri] if ri < len(pids) else None
+                    key = player_key(pid, team, nm_plain)
+                    p = pit.setdefault(key, {"key": key, "id": pid, "team": team, "name": nm_plain,
+                                             **{k: 0 for k in PIT_STATS}})
+                    p["team"] = team
                     p["G"] += 1
+                    line = {k: 0 for k in PIT_LOG}
                     if ip_i is not None and ip_i < len(r):
                         outs = innings_to_outs(r[ip_i])
                         # 部分頁面把 1/3 局拆成下一欄
                         if ip_i + 1 < len(r) and re.fullmatch(r"[12]\s*/\s*3", r[ip_i + 1] or ""):
                             outs += int(r[ip_i + 1].strip()[0])
                         p["OUTS"] += outs
+                        line["OUTS"] = outs
                     for k, i in idx.items():
                         if i is not None and i < len(r):
                             p[k] += num(r[i])
-                    for key, stat in (("winP", "W"), ("loseP", "L"), ("saveP", "SV")):
-                        if info.get(key) and info[key] in nm_plain:
+                            if k in line:
+                                line[k] = num(r[i])
+                    dec = ""
+                    for key_, stat in (("winP", "W"), ("loseP", "L"), ("saveP", "SV")):
+                        if info.get(key_) and info[key_] in nm_plain:
                             p[stat] += 1
+                            dec = stat
+                    lg = logs.setdefault(key, {"key": key, "id": pid, "name": nm_plain, "team": team, "bat": [], "pit": []})
+                    lg["pit"].append([g["id"], g["date"], opp, ha] + [line[k] for k in PIT_LOG] + [dec])
     for p in bat.values():
         p["AVG"] = round(p["H"] / p["AB"], 3) if p["AB"] else None
     for p in pit.values():
         ip = p["OUTS"] / 3
         p["IP"] = f"{p['OUTS'] // 3}" + ("" if p["OUTS"] % 3 == 0 else f" {p['OUTS'] % 3}/3")
         p["ERA"] = round(p["ER"] * 9 / ip, 2) if ip else None
+
+    # 合併選手個人資料（照片、全名、背號、守備位置）
+    for p in list(bat.values()) + list(pit.values()):
+        prof = read_json(os.path.join(DATA, "players", f"{p['id']}.json")) if p.get("id") else None
+        if prof:
+            for k in ("fullName", "kana", "photo", "number", "position"):
+                if prof.get(k):
+                    p[k] = prof[k]
+
+    pdir = os.path.join(DATA, str(year), "players")
+    for key, lg in logs.items():
+        lg["batCols"], lg["pitCols"] = BAT_LOG, PIT_LOG + ["DEC"]
+        write_json(os.path.join(pdir, f"{key}.json"), lg)
     return {"year": year, "batting": sorted(bat.values(), key=lambda p: (-p["AB"], p["name"])),
             "pitching": sorted(pit.values(), key=lambda p: (-p["OUTS"], p["name"]))}
+
+
+# ---------------------------------------------------------------- 選手個人資料
+
+PROFILE_KEYS = ["ポジション", "投打", "身長／体重", "身長/体重", "生年月日", "経歴", "ドラフト",
+                "出身地", "背番号", "Position", "Bats / Throws", "Height / Weight", "Born", "Draft"]
+KANA_RE = re.compile(r"^[ぁ-んァ-ヶー・\s　]{3,}$")
+
+
+def parse_profile(html, pid):
+    soup = BeautifulSoup(html, "html.parser")
+    prof = {"id": pid, "url": f"{BASE}/bis/players/{pid}.html"}
+    title = clean(soup.title.get_text()) if soup.title else ""
+    name = re.split(r"[（(|｜]", title)[0].strip() if title else ""
+    h1 = soup.find(["h1", "h2"])
+    if not name and h1:
+        name = clean(h1.get_text())
+    if name:
+        prof["fullName"] = name
+    for st in soup.find_all(string=True):
+        t = clean(st)
+        if KANA_RE.match(t) and len(t) <= 20:
+            prof["kana"] = t
+            break
+    fields = {}
+    for tr in soup.find_all("tr"):
+        th, td = tr.find("th"), tr.find("td")
+        if th and td:
+            k, v = clean(th.get_text()), clean(td.get_text(" "))
+            if k and v and len(k) <= 12 and len(v) <= 160:
+                fields.setdefault(k, v)
+    for dt_ in soup.find_all("dt"):
+        dd = dt_.find_next_sibling("dd")
+        if dd:
+            k, v = clean(dt_.get_text()), clean(dd.get_text(" "))
+            if k and v and len(k) <= 12 and len(v) <= 160:
+                fields.setdefault(k, v)
+    prof["fields"] = {k: v for k, v in fields.items() if any(pk in k for pk in PROFILE_KEYS)}
+    for k, v in fields.items():
+        if "ポジション" in k or k == "Position":
+            prof["position"] = v
+        if "背番号" in k:
+            prof["number"] = re.sub(r"\D", "", v) or v
+    if "number" not in prof:
+        m = re.search(r"背番号\s*[:：]?\s*(\d{1,3})", clean(soup.get_text(" ")))
+        if m:
+            prof["number"] = m.group(1)
+    for img in soup.find_all("img", src=True):
+        src = img["src"]
+        if re.search(r"logo|icon|banner|btn|arrow|common/|sns", src, re.I):
+            continue
+        if re.search(r"player|photo|/\d{6,}", src, re.I):
+            prof["photo"] = requests.compat.urljoin(prof["url"], src)
+            break
+    prof["fetched"] = now_jst().date().isoformat()
+    return prof
+
+
+def update_profiles(games, year, limit=None):
+    """抓取本季新出現的選手個人資料（每位選手只抓一次，存在 data/players/{id}.json）。"""
+    pids = set()
+    gdir = os.path.join(DATA, str(year), "games")
+    for g in games:
+        if not g.get("hasBox"):
+            continue
+        box = read_json(os.path.join(gdir, f"{g['id']}.json")) or {}
+        for t in box.get("teams", {}).values():
+            for kind in ("batting", "pitching"):
+                pids.update(x for x in ((t.get(kind) or {}).get("pids") or []) if x)
+    n = 0
+    for pid in sorted(pids):
+        path = os.path.join(DATA, "players", f"{pid}.json")
+        if os.path.exists(path):
+            continue
+        if limit is not None and n >= limit:
+            break
+        n += 1
+        try:
+            html = fetch(f"{BASE}/bis/players/{pid}.html")
+        except Exception as e:  # noqa: BLE001
+            print(f"  profile {pid} failed: {e}")
+            continue
+        if html:
+            write_json(path, parse_profile(html, pid), pretty=True)
+    if n:
+        print(f"{year}: fetched {n} player profiles")
+    return n
 
 
 # ---------------------------------------------------------------- 主流程
@@ -664,7 +807,8 @@ def update_season(year, force=False, max_boxes=None, boxes=True):
     out = {"year": year, "updated": now_jst().isoformat(timespec="minutes"),
            "complete": complete, "games": games}
     changed = write_json(sched_path, out, pretty=False)
-    if changed:
+    profiles = update_profiles(games, year, limit=max_boxes) if boxes else 0
+    if changed or profiles or not os.path.exists(os.path.join(ydir, "players.json")):
         out_players = build_players(year, games)
         write_json(os.path.join(ydir, "players.json"), out_players)
     else:
