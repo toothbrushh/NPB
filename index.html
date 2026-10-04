@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NPB 日本職棒賽程戰績</title>
+<meta name="description" content="日本職棒（NPB）各年度賽程、比分、戰績與單場球員數據">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="#/">
+    <span class="brand-mark">NPB</span>
+    <span class="brand-text">日本職棒賽程戰績</span>
+  </a>
+  <label class="season-pick">
+    <span>年度</span>
+    <select id="season"></select>
+  </label>
+</header>
+
+<nav class="tabs" id="tabs">
+  <a data-tab="schedule">賽程</a>
+  <a data-tab="standings">戰績</a>
+  <a data-tab="postseason">季後賽</a>
+  <a data-tab="players">個人成績</a>
+  <a data-tab="teams">球隊</a>
+  <a data-tab="about">關於本站</a>
+</nav>
+
+<main id="app"><p class="empty">載入中…</p></main>
+
+<dialog id="game-dialog">
+  <div class="dlg-head">
+    <span id="dlg-title"></span>
+    <button class="dlg-close" aria-label="關閉" onclick="closeGame()">✕</button>
+  </div>
+  <div id="dlg-body"></div>
+</dialog>
+
+<footer class="foot">
+  <p class="disclaimer">本站為球迷自製的獨立非營利網站，與日本野球機構（NPB）及各球團官方無關，亦未獲其授權或背書。
+    比賽資料整理自 <a href="https://npb.jp/" target="_blank" rel="noopener">NPB.jp</a> 公開資訊，僅供參考，正確資料以官方公布為準。
+    球團名稱與商標屬各權利人所有。<a href="#/about" onclick="location.hash='#/'+(state.year||'')+'/about';return false;">完整免責聲明</a></p>
+  <p>選手與球隊故事節錄／改寫自維基百科（CC BY-SA 4.0）・照片取自維基共享資源並標示作者與授權・<span id="updated"></span></p>
+</footer>
+<script src="assets/app.js"></script>
+</body>
+</html>
