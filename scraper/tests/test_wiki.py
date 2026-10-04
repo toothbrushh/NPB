@@ -26,6 +26,12 @@ def fake_api(lang, params):
                 q["converted"] = [{"from": "田中将大", "to": "田中將大"}]
                 q["pages"].append({"pageid": 2, "title": "田中將大", "extract": "田中將大是日本職業棒球投手。",
                                    "pageimage": "Nonfree.jpg", "fullurl": "https://zh.wikipedia.org/wiki/田中將大"})
+            if "山田花子" in titles:
+                q["pages"].append({"pageid": 5, "title": "山田花子", "extract": "山田花子是日本職業棒球選手。",
+                                   "pageimage": "Team_logo.svg"})
+            if "鈴木次郎" in titles:
+                q["pages"].append({"pageid": 6, "title": "鈴木次郎", "extract": "鈴木次郎是日本職業棒球捕手。",
+                                   "pageimage": "Suzuki_nometa.jpg"})
             if "中村一郎" in titles:
                 q["pages"].append({"pageid": 3, "title": "中村一郎", "extract": "中村一郎是日本政治人物。"})
             if "佐藤太郎" in titles:
@@ -41,6 +47,10 @@ def fake_api(lang, params):
     if params.get("prop") == "imageinfo":
         pages = []
         for t in params["titles"].split("|"):
+            assert "logo" not in t.lower()
+            if "nometa" in t:  # 沒有中繼資料時 API 回傳空陣列
+                pages.append({"title": t, "imageinfo": [{"thumburl": "x", "descriptionurl": "y", "extmetadata": []}]})
+                continue
             lic = "CC BY-SA 4.0" if "Izuguchi" in t else "Fair use"
             pages.append({"title": t, "imageinfo": [{
                 "thumburl": f"https://upload.wikimedia.org/thumb/{t}", "descriptionurl": f"https://commons.wikimedia.org/wiki/{t}",
@@ -63,7 +73,8 @@ class WikiTest(unittest.TestCase):
         os.makedirs(players)
         for pid, name, kana in (("1", "泉口　友汰", "いずぐち・ゆうた"), ("2", "田中　将大", "たなか・まさひろ"),
                                 ("3", "中村　一郎", "なかむら・いちろう"), ("4", "佐藤　太郎", "さとう・たろう"),
-                                ("5", "Ｔ．キャベッジ", "トレイ・キャベッジ (TREY CABBAGE)")):
+                                ("5", "Ｔ．キャベッジ", "トレイ・キャベッジ (TREY CABBAGE)"),
+                                ("6", "山田　花子", "やまだ・はなこ"), ("7", "鈴木　次郎", "すずき・じろう")):
             npb_scraper.write_json(os.path.join(players, f"{pid}.json"), {"id": pid, "fullName": name, "kana": kana})
 
     def tearDown(self):
@@ -79,7 +90,10 @@ class WikiTest(unittest.TestCase):
         self.assertEqual(wiki.candidate_titles("5"), ["トレイ・キャベッジ"])
 
     def test_collect(self):
-        wiki.collect({k: wiki.candidate_titles(k) for k in "12345"}, "p")
+        wiki.collect({k: wiki.candidate_titles(k) for k in "1234567"}, "p")
+        # 隊徽圖片不採用；沒有授權資訊的圖片不採用（但文字照常收錄）
+        self.assertIsNone(self.read("6")["photo"])
+        self.assertIsNone(self.read("7")["photo"])
         e = self.read("1")
         self.assertEqual((e["title"], e["lang"], e["method"]), ("泉口友汰", "zh", "excerpt"))
         self.assertLessEqual(len(e["summary"]), wiki.SUMMARY_MAX)

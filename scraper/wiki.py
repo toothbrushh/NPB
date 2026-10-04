@@ -34,6 +34,8 @@ DELAY = float(os.environ.get("WIKI_DELAY", "1.0"))
 BATCH = 20  # prop=extracts 搭配 exintro 每次最多 20 頁
 RETRY_MISSING_DAYS = 90
 SUMMARY_MAX = 300
+# 隊徽、標誌即使在維基共享資源標為公有領域，仍是球團商標，不採用
+LOGO_FILE = re.compile(r"logo|emblem|insignia|wordmark|cap[ _]insignia|ロゴ|標誌|隊徽|徽章", re.I)
 FREE_LICENSE = re.compile(r"^(CC[ -]BY(-SA)?([ -]\d\.\d)?|CC0|Public domain|PD\b|公有領域)", re.I)
 BASEBALL_WORDS = ("野球", "棒球", "投手", "捕手", "內野手", "内野手", "外野手", "球員", "選手", "球團", "球団", "プロ野球", "職棒")
 
@@ -129,17 +131,19 @@ def fetch_image_info(lang, files):
             ii = (p.get("imageinfo") or [None])[0]
             if not ii:
                 continue
-            meta = ii.get("extmetadata", {})
-            lic = strip_html(meta.get("LicenseShortName", {}).get("value"))
+            # 沒有中繼資料時 API 會回傳空陣列 [] 而不是物件
+            meta = ii.get("extmetadata") if isinstance(ii.get("extmetadata"), dict) else {}
+            field = lambda k: strip_html((meta.get(k) or {}).get("value") if isinstance(meta.get(k), dict) else "")
+            lic = field("LicenseShortName")
             if not FREE_LICENSE.match(lic):
                 continue
             name = back.get(p["title"], p["title"]).split(":", 1)[-1]
             out[name] = {
                 "src": ii.get("thumburl") or ii.get("url"),
                 "page": ii.get("descriptionurl"),
-                "artist": strip_html(meta.get("Artist", {}).get("value")) or "佚名",
+                "artist": field("Artist") or "佚名",
                 "license": lic,
-                "licenseUrl": strip_html(meta.get("LicenseUrl", {}).get("value")) or None,
+                "licenseUrl": field("LicenseUrl") or None,
             }
     return out
 
@@ -229,7 +233,7 @@ def make_entry(page, lang, photos):
         "method": "rewrite" if summary else "excerpt",
         "license": "CC BY-SA 4.0",
         "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0/deed.zh-hant",
-        "photo": photos.get(page.get("pageimage")) if page.get("pageimage") else None,
+        "photo": photos.get(page.get("pageimage")),
         "fetched": now_jst().date().isoformat(),
     }
     return entry
@@ -279,7 +283,8 @@ def collect(items, kind):
                 if p and (kind == "t" or looks_like_baseball(p["extract"])):
                     hits[k] = p
                     break
-        files = sorted({p["pageimage"] for p in hits.values() if p.get("pageimage")})
+        files = sorted({p["pageimage"] for p in hits.values()
+                        if p.get("pageimage") and not LOGO_FILE.search(p["pageimage"])})
         photos = fetch_image_info(lang, files) if files else {}
         for k, p in hits.items():
             results[k] = make_entry(p, lang, photos)
