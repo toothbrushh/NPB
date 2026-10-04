@@ -1112,7 +1112,10 @@ def parse_years(spec):
         if not part:
             continue
         if part == "current":
+            # 去年若還沒封存（例如季後賽結束後還沒跑過），一併補完；已封存的年度會立即跳過
             years.add(now_jst().year)
+            if not (read_json(os.path.join(DATA, str(now_jst().year - 1), "schedule.json"), {}) or {}).get("complete", True):
+                years.add(now_jst().year - 1)
         elif "-" in part:
             a, b = part.split("-", 1)
             b = now_jst().year if b.strip() == "current" else int(b)
