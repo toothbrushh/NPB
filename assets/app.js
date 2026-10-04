@@ -368,44 +368,112 @@ function drawRace(el, rows) {
   svg.addEventListener('pointerleave', () => { tip.hidden = true; xh.setAttribute('visibility', 'hidden'); });
 }
 
-/* ------------------------------------------------------------ 季後賽 */
-function renderPostseason() {
-  const post = state.sched.games.filter(g => STAGE_ORDER.includes(g.stage));
-  if (!post.length) {
-    $('#app').innerHTML = '<p class="empty">本年度尚無季後賽賽程</p>';
-    return;
+/* ------------------------------------------------------------ 季後賽（樹狀對戰圖） */
+// 賽制：CS 第一階段（2 位 vs 3 位，3 戰 2 勝）→ CS 最終階段（1 位 vs 第一階段勝者，6 戰 4 勝，1 位先取 1 勝）
+//       → 日本一系列賽（兩聯盟 CS 勝者，7 戰 4 勝）。和局不計勝敗；系列賽打完仍平手時由排名較高者晉級。
+const SERIES_RULE = { cs1: { need: 2, max: 3 }, cs2: { need: 4, max: 6 }, js: { need: 4, max: 8 } };
+
+function buildSeries(stage, teams, games, adv = {}) {
+  // teams：[上方（排名較高／主場）, 下方]；可能含 null（尚未決定）
+  const wins = Object.fromEntries(teams.filter(Boolean).map(t => [t, adv[t] || 0]));
+  let ties = 0, played = 0;
+  for (const g of games) {
+    if (g.status !== 'final') continue;
+    played++;
+    if (g.awayScore === g.homeScore) ties++;
+    else if (wins[g.awayScore > g.homeScore ? g.away : g.home] != null) wins[g.awayScore > g.homeScore ? g.away : g.home]++;
   }
-  const groups = new Map();
-  for (const g of post) {
-    const lg = g.stage === 'js' ? 'JS' : (TEAMS[g.home]?.lg || '');
-    const key = `${g.stage}|${lg}|${[g.away, g.home].sort().join('-')}`;
-    if (!groups.has(key)) groups.set(key, { stage: g.stage, name: g.stageName, lg, games: [] });
-    groups.get(key).games.push(g);
-  }
-  const sorted = [...groups.values()].sort((a, b) =>
-    STAGE_ORDER.indexOf(a.stage) - STAGE_ORDER.indexOf(b.stage) || a.lg.localeCompare(b.lg));
-  let html = '<h2>季後賽</h2><p class="status" style="color:var(--muted)">高潮系列賽（CS）第一階段 3 戰 2 勝；最終階段 6 戰 4 勝（聯盟冠軍先取 1 勝優勢，不計入下方比賽數）。日本一系列賽 7 戰 4 勝。</p>';
-  let cur = '';
-  for (const s of sorted) {
-    const title = s.stage === 'js' ? s.name : `${LEAGUES[s.lg] || ''} ${s.name}`;
-    if (title !== cur) { html += `<h3>${esc(title)}</h3>`; cur = title; }
-    const teams = [...new Set(s.games.flatMap(g => [g.home, g.away]))];
-    const wins = Object.fromEntries(teams.map(t => [t, 0]));
-    let ties = 0;
-    for (const g of s.games) {
-      if (g.status !== 'final') continue;
-      if (g.awayScore === g.homeScore) ties++;
-      else wins[g.awayScore > g.homeScore ? g.away : g.home]++;
+  const rule = SERIES_RULE[stage];
+  let winner = teams.find(t => t && wins[t] >= rule.need) || null;
+  // 規定場數打完仍未分出（和局造成）：排名較高者晉級（日本一系列賽則加賽，不在此判定）
+  if (!winner && stage !== 'js' && played >= rule.max && teams[0] && teams[1] && wins[teams[0]] >= wins[teams[1]]) winner = teams[0];
+  return { stage, teams, wins, adv, ties, games, winner, started: played > 0 };
+}
+
+function postseasonBracket() {
+  const games = state.sched.games;
+  const post = games.filter(g => ['cs1', 'cs2', 'cs', 'js'].includes(g.stage));
+  const st = computeStandings(games);
+  const regularDone = !games.some(g => g.stage === 'regular' && g.status === 'scheduled');
+  const lg = c => TEAMS[c]?.lg;
+  const side = {};
+  for (const L of ['C', 'P']) {
+    const top3 = (st[L] || []).slice(0, 3).map(r => r.code);
+    const cs1Games = post.filter(g => g.stage === 'cs1' && lg(g.home) === L);
+    const cs2Games = post.filter(g => (g.stage === 'cs2' || g.stage === 'cs') && lg(g.home) === L);
+    // 實際參賽隊伍優先；沒有比賽時用目前排名推定
+    const cs1Teams = cs1Games.length ? [cs1Games[0].home, cs1Games[0].away] : [top3[1] || null, top3[2] || null];
+    const s1 = buildSeries('cs1', cs1Teams, cs1Games);
+    let leader = top3[0] || null;
+    if (cs2Games.length) {
+      const inFinal = [...new Set(cs2Games.flatMap(g => [g.home, g.away]))];
+      leader = inFinal.find(t => !cs1Teams.includes(t)) || cs2Games[0].home;
     }
-    html += `<div class="series"><div class="series-head">
-      <div>${teams.map(t => `${dot(t)} <b>${esc(team(t).zh)}</b>`).join(' vs ')}</div>
-      <div class="series-score">${teams.map(t => `${esc(team(t).s)} ${wins[t]}`).join(' – ')}${ties ? `（和 ${ties}）` : ''}</div></div>
-      <div class="series-games">${s.games.map((g, i) => `<span class="sg" ${g.hasBox ? `data-game="${esc(g.id)}"` : ''}>
-        第${i + 1}戰 ${g.date.slice(5).replace('-', '/')} ${esc(team(g.away).s)}
-        <b>${g.status === 'final' ? `${g.awayScore}-${g.homeScore}` : g.status === 'postponed' ? '延賽' : esc(g.time || 'vs')}</b>
-        ${esc(team(g.home).s)}</span>`).join('')}</div></div>`;
+    const challenger = s1.winner || (cs2Games.length ? cs2Games.flatMap(g => [g.home, g.away]).find(t => t !== leader) : null);
+    const s2 = buildSeries('cs2', [leader, challenger || null], cs2Games, leader ? { [leader]: 1 } : {});
+    side[L] = { s1, s2, projected: !post.some(g => lg(g.home) === L), regularDone };
   }
-  $('#app').innerHTML = html;
+  const jsGames = post.filter(g => g.stage === 'js');
+  let jsTeams = [side.C.s2.winner, side.P.s2.winner];
+  if (jsGames.length) {
+    const t = [...new Set(jsGames.flatMap(g => [g.home, g.away]))];
+    jsTeams = [t.find(x => lg(x) === 'C') || jsTeams[0], t.find(x => lg(x) === 'P') || jsTeams[1]];
+  }
+  const js = buildSeries('js', jsTeams, jsGames);
+  return { side, js, any: post.length > 0, regularDone };
+}
+
+function seriesBox(s, title, opts = {}) {
+  const rule = SERIES_RULE[s.stage];
+  const row = (t, i) => {
+    if (!t) return `<div class="bt tbd"><span class="seed">${opts.seeds?.[i] || ''}</span><span class="nm">待定</span><b>-</b></div>`;
+    const lost = s.winner && s.winner !== t;
+    return `<div class="bt ${s.winner === t ? 'win' : ''} ${lost ? 'out' : ''}">
+      ${opts.seeds?.[i] ? `<span class="seed">${opts.seeds[i]}</span>` : ''}${logo(t, 24)}
+      <a class="nm tlink" href="#/${state.year}/teams/${t}">${esc(team(t).s)}</a>
+      ${s.adv[t] ? '<span class="adv" title="聯盟冠軍先取 1 勝">+1</span>' : ''}<b>${s.wins[t] ?? 0}</b></div>`;
+  };
+  const status = s.winner ? `${esc(team(s.winner).s)} 晉級` : s.started ? '進行中' : '未開打';
+  const chips = s.games.map((g, i) => `<span class="sg ${g.hasBox ? '' : 'nobox'}" ${g.hasBox ? `data-game="${esc(g.id)}"` : ''}>
+      ${i + 1}戰 ${g.date.slice(5).replace('-', '/')} ${g.status === 'final' ? `<b>${esc(team(g.away).s)} ${g.awayScore}-${g.homeScore} ${esc(team(g.home).s)}</b>` : g.status === 'postponed' ? '延賽' : `${esc(team(g.away).s)} @ ${esc(team(g.home).s)} ${esc(g.time || '')}`}</span>`).join('');
+  return `<div class="bbox ${opts.cls || ''}">
+    <div class="bhead"><span>${title}</span><small>${rule.need} 勝晉級・${status}${s.ties ? `・和 ${s.ties}` : ''}</small></div>
+    ${row(s.teams[0], 0)}${row(s.teams[1], 1)}
+    ${chips ? `<details class="bgames"><summary>各場比分</summary><div class="series-games">${chips}</div></details>` : ''}
+  </div>`;
+}
+
+function renderPostseason() {
+  const b = postseasonBracket();
+  const champ = b.js.winner;
+  const projected = !b.any;
+  const sideHtml = (L) => {
+    const s = b.side[L];
+    return `<div class="bcol first">${seriesBox(s.s1, '第一階段', { seeds: ['2位', '3位'] })}</div>
+      <div class="bcol final">${seriesBox(s.s2, '最終階段', { seeds: ['1位', ''] })}</div>`;
+  };
+  $('#app').innerHTML = `<h2>${state.year} 季後賽對戰圖</h2>
+    ${projected ? `<p class="notice">${b.regularDone ? '季後賽尚未排定。' : '例行賽尚未結束，'}以下依目前排名顯示預定的對戰組合，實際對戰以官方公布為準。</p>` : ''}
+    <div class="bracket">
+      <div class="bside left">
+        <div class="blabel"><span class="tag c">C</span> 中央聯盟 高潮系列賽</div>
+        <div class="bcols">${sideHtml('C')}</div>
+      </div>
+      <div class="bcenter">
+        <div class="trophy ${champ ? 'done' : ''}">
+          <div class="cup">🏆</div>
+          <div class="label">日本一</div>
+          ${champ ? `<div class="champ">${logo(champ, 56)}<div>${teamLink(champ)}</div></div>` : '<div class="muted small">尚未產生</div>'}
+        </div>
+        ${seriesBox(b.js, '日本一系列賽', { cls: 'js', seeds: ['央聯', '洋聯'] })}
+      </div>
+      <div class="bside right">
+        <div class="blabel"><span class="tag p">P</span> 太平洋聯盟 高潮系列賽</div>
+        <div class="bcols">${sideHtml('P')}</div>
+      </div>
+    </div>
+    <p class="muted small">賽制：第一階段 2 位 vs 3 位（3 戰 2 勝，全在 2 位主場）；最終階段 1 位 vs 第一階段勝者（6 戰 4 勝，1 位先取 1 勝並享主場）；
+      日本一系列賽 7 戰 4 勝。和局不計勝敗，系列賽打滿仍平手時由排名較高者晉級。點「各場比分」可展開各場比賽。</p>`;
   bindGameClicks();
 }
 
