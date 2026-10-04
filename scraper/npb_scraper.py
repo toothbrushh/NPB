@@ -17,7 +17,7 @@ NPB 賽程 / 比分 / 個人成績爬蟲。
   data/{年}/players.json            官方年度個人成績
   data/{年}/players/{key}.json      選手逐場紀錄
   data/{年}/names.json              單場成績表上的簡稱 → 選手 key
-  data/players/{選手ID}.json        選手個人資料（照片、全名、背號…）
+  data/players/{選手ID}.json        選手個人資料（全名、背號、守備位置…；不含照片）
 
 快取規則：
   * 已結束的比賽，單場 JSON 寫入後永不重抓。
@@ -813,9 +813,7 @@ def parse_profile(html, pid):
         el = sel(css)
         if el and text_of(el):
             prof[key] = text_of(el)
-    img = sel("#pc_v_photo img")
-    if img and img.get("src"):
-        prof["photo"] = requests.compat.urljoin(prof["url"], img["src"])
+    # 選手照片版權屬 NPB／各球團，不記錄；網頁只使用維基共享資源上自由授權的照片（見 wiki.py）
     fields = {}
     for tr in soup.find_all("tr"):
         th, td = tr.find("th"), tr.find("td")
@@ -1001,7 +999,7 @@ def build_players(year, games, stats):
                     p["id"] = p["key"] = pid
             if p.get("id"):
                 prof = read_json(os.path.join(DATA, "players", f"{p['id']}.json")) or {}
-                for k in ("photo", "kana", "number", "position"):
+                for k in ("kana", "number", "position"):
                     if prof.get(k):
                         p[k] = prof[k]
                 if logs.get(p["id"]):

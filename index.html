@@ -25,6 +25,7 @@
   <a data-tab="postseason">季後賽</a>
   <a data-tab="players">個人成績</a>
   <a data-tab="teams">球隊</a>
+  <a data-tab="about">關於本站</a>
 </nav>
 
 <main id="app"><p class="empty">載入中…</p></main>
@@ -38,8 +39,10 @@
 </dialog>
 
 <footer class="foot">
-  資料來源：<a href="https://npb.jp/" target="_blank" rel="noopener">日本野球機構 NPB.jp</a>
-  ・ <span id="updated"></span>
+  <p class="disclaimer">本站為球迷自製的獨立非營利網站，與日本野球機構（NPB）及各球團官方無關，亦未獲其授權或背書。
+    比賽資料整理自 <a href="https://npb.jp/" target="_blank" rel="noopener">NPB.jp</a> 公開資訊，僅供參考，正確資料以官方公布為準。
+    球團名稱與商標屬各權利人所有。<a href="#/about" onclick="location.hash='#/'+(state.year||'')+'/about';return false;">完整免責聲明</a></p>
+  <p>選手與球隊故事節錄／改寫自維基百科（CC BY-SA 4.0）・照片取自維基共享資源並標示作者與授權・<span id="updated"></span></p>
 </footer>
 <script src="assets/app.js"></script>
 </body>

@@ -43,6 +43,14 @@ jobs:
           SEASONS: ${{ github.event.inputs.seasons || 'current' }}
           FORCE: ${{ github.event.inputs.force == 'true' && '--force' || '' }}
         run: python scraper/npb_scraper.py --seasons "$SEASONS" $FORCE
+      - name: Wikipedia intros and free photos
+        # 選用：在 Settings → Secrets → Actions 設定 ANTHROPIC_API_KEY，就會用 Claude 把維基導言改寫成 200–300 字摘要；
+        # 未設定時改用節錄。維基百科暫時無法連線不影響其他資料更新。
+        continue-on-error: true
+        env:
+          SEASONS: ${{ github.event.inputs.seasons || 'current' }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python scraper/wiki.py --seasons "$SEASONS"
       - name: Commit data
         run: |
           git config user.name "github-actions[bot]"

@@ -257,7 +257,7 @@ class OtherPagesTest(unittest.TestCase):
     def test_profile(self):
         p = s.parse_profile(PROFILE, "11215114")
         self.assertEqual((p["fullName"], p["kana"], p["number"]), ("田中 将大", "たなか・まさひろ", "11"))
-        self.assertEqual(p["photo"], "https://p.npb.jp/players_photo/2026/180/g/011_11215114.jpg")
+        self.assertNotIn("photo", p)
         self.assertEqual(p["fields"]["投打"], "右投右打")
 
     def test_names(self):

@@ -28,8 +28,9 @@ const state = { seasons: [], year: null, sched: null, players: null, tab: 'sched
 const $ = (s, r = document) => r.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const team = c => TEAMS[c] || { zh: c, s: c, color: '#888', lg: '' };
-// 球隊隊徽：優先顯示 npb.jp 上該年度的官方隊徽，載入失敗時改用本站的 assets/logos/{代碼}.svg
-const LOGO_SOURCE = 'official'; // 改成 'local' 則只用本站徽章
+// 球隊徽章：預設使用本站自製的 assets/logos/{代碼}.svg。
+// 官方隊徽為各球團的商標與著作物，未取得授權前請勿改成 'official'（會直接顯示 npb.jp 上的官方圖檔）。
+const LOGO_SOURCE = 'local';
 const logo = (c, size = 22) => {
   if (!TEAMS[c]) return '<span class="dot" style="background:#888"></span>';
   const local = `assets/logos/${c}.svg`;
@@ -107,9 +108,28 @@ async function loadSeason(year) {
 
 function render() {
   const fn = { schedule: renderSchedule, standings: renderStandings, postseason: renderPostseason,
-    players: renderPlayers, teams: renderTeams, player: renderPlayer }[state.tab] || renderSchedule;
+    players: renderPlayers, teams: renderTeams, player: renderPlayer, about: renderAbout }[state.tab] || renderSchedule;
   window.scrollTo(0, 0);
   fn();
+}
+
+function renderAbout() {
+  $('#app').innerHTML = `<article class="about">
+    <h2>關於本站與免責聲明</h2>
+    <p class="lead">本站為球迷自製的獨立非營利網站，與日本野球機構（NPB）、中央聯盟、太平洋聯盟及各球團官方均無任何關係，亦未獲其授權、贊助或背書。</p>
+    <h3>資料來源與正確性</h3>
+    <p>賽程、比分、勝敗紀錄與個人成績等比賽事實資料，整理自<a href="https://npb.jp/" target="_blank" rel="noopener">日本野球機構官方網站</a>公開的資訊，由程式自動彙整，僅供參考。資料可能有延遲、遺漏或錯誤，一切以 NPB 及各球團官方公布者為準；本站不對因使用本站資訊所生之任何損失負責。</p>
+    <h3>商標與隊徽</h3>
+    <p>各球團名稱、隊徽、標誌及相關商標均屬各權利人所有。本站球隊徽章為本站自製的示意圖案，並非官方隊徽，亦不代表與各球團有任何關聯。</p>
+    <h3>文字與照片</h3>
+    <ul>
+      <li>「選手簡介」由本站依公開的選手資料與成績自行撰寫。</li>
+      <li>「選手故事」與「球隊故事」節錄或改寫自維基百科，每段文字下方均標示原條目連結；依<a href="https://creativecommons.org/licenses/by-sa/4.0/deed.zh-hant" target="_blank" rel="noopener license">創用 CC 姓名標示－相同方式分享 4.0 國際（CC BY-SA 4.0）</a>授權條款使用，衍生內容亦以相同條款釋出。</li>
+      <li>照片僅使用維基共享資源（Wikimedia Commons）上以自由授權（CC BY、CC BY-SA、CC0 或公有領域）釋出的圖片，並於照片下方標示作者與授權條款。本站不使用 NPB 或各球團的官方照片。</li>
+    </ul>
+    <h3>權利人聯絡</h3>
+    <p>若您是相關權利人，認為本站內容有侵害您權利之虞，請透過 <a href="https://github.com/toothbrushh/npb/issues" target="_blank" rel="noopener">GitHub Issues</a> 與我們聯絡，我們將儘速確認並移除或修正相關內容。</p>
+  </article>`;
 }
 
 function renderNoData() {
@@ -454,41 +474,32 @@ function teamGames() {
   return n;
 }
 
-/* ------------------------------------------------------------ 維基百科（照片、故事） */
-// 瀏覽器端直接呼叫維基百科 REST API（支援 CORS）；中文優先（台灣正體），找不到再用日文
-async function wiki(titles) {
-  for (const [lang, t] of titles) {
-    if (!t) continue;
-    const ck = `wiki:${lang}:${t}`;
-    try {
-      const c = sessionStorage.getItem(ck);
-      if (c) { const v = JSON.parse(c); if (v) return v; continue; }
-    } catch { /* 無法使用 sessionStorage 時略過快取 */ }
-    let v = null;
-    try {
-      const r = await fetch(`https://${lang}.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(t)}`,
-        { headers: lang === 'zh' ? { 'Accept-Language': 'zh-tw' } : {} });
-      if (r.ok) {
-        const j = await r.json();
-        if (j.type !== 'disambiguation' && j.extract) {
-          v = { title: j.title, text: j.extract, img: j.thumbnail?.source, url: j.content_urls?.desktop?.page, lang };
-        }
-      }
-    } catch { /* 網路錯誤 */ }
-    try { sessionStorage.setItem(ck, JSON.stringify(v)); } catch { /* ignore */ }
-    if (v) return v;
-  }
-  return null;
+/* ------------------------------------------------------------ 維基百科（故事、照片） */
+// 由 scraper/wiki.py 在建置時透過維基百科官方 API 取得並存成 data/wiki/{p|t}/{key}.json，網頁不直接連線維基百科
+async function loadWiki(kind, key) {
+  try {
+    const w = await getJSON(`data/wiki/${kind}/${encodeURIComponent(key)}.json`);
+    return w && !w.none ? w : null;
+  } catch { return null; }
 }
 
-function storyCard(el, w, fallbackText) {
+// 維基共享資源照片＋作者、授權標示（CC BY / BY-SA 要求標示姓名與授權）
+function wikiPhoto(ph, alt) {
+  if (!ph?.src) return '';
+  const lic = ph.licenseUrl ? `<a href="${esc(ph.licenseUrl)}" target="_blank" rel="noopener license">${esc(ph.license)}</a>` : esc(ph.license);
+  return `<figure class="wphoto"><img src="${esc(ph.src)}" alt="${esc(alt)}" loading="lazy">
+    <figcaption>Photo by <a href="${esc(ph.page)}" target="_blank" rel="noopener">${esc(ph.artist)}</a>, ${lic}，取自維基共享資源</figcaption></figure>`;
+}
+
+function storyCard(el, w, fallbackText, withPhoto = true) {
   if (!el) return;
   if (!w) { el.innerHTML = fallbackText ? `<p class="muted">${fallbackText}</p>` : ''; return; }
   el.innerHTML = `<div class="story">
-    ${w.img ? `<img src="${esc(w.img)}" alt="${esc(w.title)}" loading="lazy" referrerpolicy="no-referrer">` : ''}
-    <div><h3>${esc(w.title)}</h3><p>${esc(w.text)}</p>
-    <a href="${esc(w.url)}" target="_blank" rel="noopener">在維基百科閱讀完整介紹 →</a>
-    <div class="muted small">內容來自${w.lang === 'zh' ? '中文' : '日文'}維基百科（CC BY-SA 4.0）</div></div></div>`;
+    ${withPhoto ? wikiPhoto(w.photo, w.title) : ''}
+    <div><p>${esc(w.summary)}</p>
+    <p class="credit">以上文字${w.method === 'rewrite' ? '改寫' : '節錄'}自${w.lang === 'zh' ? '中文' : '日文'}維基百科
+      「<a href="${esc(w.url)}" target="_blank" rel="noopener">${esc(w.title)}</a>」條目，
+      依<a href="${esc(w.licenseUrl)}" target="_blank" rel="noopener license">創用 CC 姓名標示－相同方式分享 4.0（CC BY-SA 4.0）</a>授權條款使用${w.method === 'rewrite' ? '，並以相同條款釋出' : ''}。</p></div></div>`;
 }
 
 async function loadPlayers() {
@@ -498,10 +509,39 @@ async function loadPlayers() {
   return state.players;
 }
 
+// 頭像只顯示姓氏首字（照片僅在選手頁使用維基共享資源上自由授權的圖片，並附作者與授權）
 function avatar(p, size = 64) {
   const initial = esc((p.fullName || p.name || '?').trim().slice(0, 1));
-  return `<span class="avatar" style="width:${size}px;height:${size}px;--tc:${team(p.team).color}">
-    <span>${initial}</span>${p.photo ? `<img src="${esc(p.photo)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}</span>`;
+  return `<span class="avatar" style="width:${size}px;height:${size}px;--tc:${team(p.team).color}"><span>${initial}</span></span>`;
+}
+
+// 本站依官方公開資料（生日、投打、經歷、當季成績等事實）自行撰寫的選手簡介
+const POSITION_ZH = { 投手: '投手', 捕手: '捕手', 内野手: '內野手', 外野手: '外野手' };
+function bioText(name, p, prof, bat, pit, isPitcher) {
+  const f = prof?.fields || {};
+  const out = [];
+  const pos = POSITION_ZH[f['ポジション']] || f['ポジション'] || '';
+  const hw = (f['身長／体重'] || '').match(/(\d+)cm／(\d+)kg/);
+  let s1 = `${name}`;
+  if (f['生年月日']) s1 += `，${f['生年月日']}出生`;
+  if (f['投打'] || pos) s1 += `，${f['投打'] || ''}的${pos || '選手'}`;
+  if (hw) s1 += `，身高 ${hw[1]} 公分、體重 ${hw[2]} 公斤`;
+  out.push(s1 + '。');
+  if (f['経歴']) out.push(`經歷：${f['経歴'].replace(/\s*-\s*/g, '、')}。`);
+  if (f['ドラフト']) {
+    const d = f['ドラフト'].replace('高校生ドラフト', '高中生選秀').replace('大学生・社会人ドラフト', '大學與社會人選秀')
+      .replace('育成ドラフト', '育成選秀').replace('ドラフト', '選秀').replace(/(\d+)巡目/, '第 $1 輪').replace(/(\d+)位/, '第 $1 指名');
+    out.push(`${d}進入職棒。`);
+  }
+  const tm = team(p.team).zh;
+  if (pit && isPitcher) {
+    out.push(`${state.year} 年球季效力${tm}，登板 ${pit.G} 場，${pit.W} 勝 ${pit.L} 敗${pit.SV ? `、${pit.SV} 次救援` : ''}${pit.HLD ? `、${pit.HLD} 次中繼成功` : ''}，`
+      + `投球 ${pit.IP} 局、三振 ${pit.SO} 次，防禦率 ${pit.ERA == null ? '-' : pit.ERA.toFixed(2)}。`);
+  } else if (bat) {
+    out.push(`${state.year} 年球季效力${tm}，出賽 ${bat.G} 場，打擊率 ${rate(bat.AVG)}，擊出 ${bat.H} 支安打、${bat.HR} 支全壘打，`
+      + `${bat.RBI} 分打點${bat.SB ? `、${bat.SB} 次盜壘成功` : ''}。`);
+  }
+  return out.join('');
 }
 
 /* ------------------------------------------------------------ 球隊 */
@@ -570,9 +610,9 @@ async function renderTeams() {
         <div class="muted small">${esc(x.position || '')} ${x.roles.join(' · ')}</div></div></a>`).join('')}</div>`
       : '<p class="muted">本年度尚無球員出賽資料</p>';
   });
-  wiki([['zh', T.wiki[0]], ['ja', T.wiki[1]]]).then(w => {
+  loadWiki('t', code).then(w => {
     const el = $('#team-story');
-    if (el?.dataset.code === code) storyCard(el, w, '目前無法載入維基百科介紹。');
+    if (el?.dataset.code === code) storyCard(el, w, '尚未取得這支球隊的維基百科介紹。');
   });
 }
 
@@ -597,7 +637,6 @@ async function renderPlayer() {
   p.team = base.team;
   // 日籍選手用個人頁全名（姓 名）；外籍／登錄名選手用官方成績上的名字
   const name = fullName(prof?.fullName?.match(/[\s\u3000]/) ? prof.fullName : base.name);
-  const foreignName = /[ァ-ヶ]/.test(p.kana || '') ? (p.kana || '').split(/\s*[(（]/)[0].trim() : '';
   const isPitcher = pit && (!bat || pit.G >= (bat.G || 0) / 2);
   const gameById = Object.fromEntries(state.sched.games.map(g => [g.id, g]));
   const res = (gid, ha) => {
@@ -633,7 +672,7 @@ async function renderPlayer() {
 
   $('#app').innerHTML = `
     <section class="player-hero" style="--tc:${team(p.team).color}">
-      <div class="player-photo">${avatar({ ...p, name }, 160)}</div>
+      <div class="player-photo" id="player-photo">${avatar({ ...p, name }, 160)}</div>
       <div>
         <div class="muted">${logo(p.team, 22)} ${teamLink(p.team)}</div>
         <h1>${p.number ? `<span class="num">#${esc(p.number)}</span> ` : ''}${esc(name)}</h1>
@@ -648,19 +687,17 @@ async function renderPlayer() {
     ${isPitcher && pitCards ? `<h2>${state.year} 投球成績</h2><div class="stat-row">${pitCards}</div>` : ''}
     ${bat && (bat.PA || !isPitcher) ? `<h2>${state.year} 打擊成績</h2><div class="stat-row">${batCards}</div>` : ''}
     ${!isPitcher && pitCards ? `<h2>${state.year} 投球成績</h2><div class="stat-row">${pitCards}</div>` : ''}
-    <h2>選手故事</h2><div id="player-story"><p class="muted">載入維基百科介紹中…</p></div>
+    <h2>選手簡介</h2><div class="story"><div><p>${esc(bioText(name, p, prof, bat, pit, isPitcher))}</p>
+      <p class="credit">本段由本站依 NPB 公開的選手資料與成績整理撰寫。</p></div></div>
+    <h2>選手故事</h2><div id="player-story"><p class="muted">載入中…</p></div>
     ${pitLog ? `<h2>逐場投球紀錄</h2>${pitLog}` : ''}
     ${batLog ? `<h2>逐場打擊紀錄</h2>${batLog}` : ''}`;
   $('#app').querySelectorAll('tr.clickable[data-game]').forEach(el =>
     el.addEventListener('click', () => { location.hash = `#/${state.year}/game/${el.dataset.game}`; }));
-  // 只有姓氏時（沒有全名）維基百科多半會對到消歧義頁，因此只用全名查詢
-  const wikiName = name.includes(' ') ? name.replace(/\s+/g, '') : foreignName;
-  const w = wikiName ? await wiki([['zh', wikiName], ['ja', wikiName], ['ja', `${wikiName} (野球選手)`]]) : null;
+  const w = p.id ? await loadWiki('p', p.id) : null;
   if (state.tab === 'player' && state.extra === key) {
-    storyCard($('#player-story'), w, wikiName ? '維基百科上找不到這位選手的條目。' : '尚未取得選手全名，無法查詢維基百科。');
-    if (w?.img && !p.photo) {
-      $('.player-photo .avatar')?.insertAdjacentHTML('beforeend', `<img src="${esc(w.img)}" alt="" referrerpolicy="no-referrer" onerror="this.remove()">`);
-    }
+    storyCard($('#player-story'), w, '維基百科上沒有找到這位選手的條目。', false);
+    if (w?.photo) $('#player-photo').innerHTML = wikiPhoto(w.photo, name);
   }
 }
 
