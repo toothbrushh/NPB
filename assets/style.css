@@ -243,3 +243,8 @@ dl.profile dd { margin: 0; }
 .res { font-weight: 700; font-size: 12px; }
 .res.W { color: var(--win); } .res.L { color: var(--lose); } .res.T { color: var(--tie); }
 table.data a.plink, table.data a.tlink { border-bottom: 1px dotted var(--muted); }
+.pcell { display: inline-flex; align-items: center; gap: 8px; }
+.pcell .avatar span { font-size: 12px; }
+.play { font-size: 12px; color: var(--muted); }
+.play.hit { color: var(--text); font-weight: 700; }
+tr.total td { font-weight: 700; background: var(--panel-2); }

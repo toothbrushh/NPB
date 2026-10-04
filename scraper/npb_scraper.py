@@ -4,14 +4,20 @@ NPB 賽程 / 比分 / 個人成績爬蟲。
 
 資料來源：日本野球機構官方網站 npb.jp
   * 月曆（賽程與比分）：https://npb.jp/bis/eng/{年}/calendar/index_{月}.html
-  * 單場成績：          https://npb.jp/bis/{年}/games/s{比賽ID}.html
-  * 場地補充（未賽）：  https://npb.jp/games/{年}/schedule_{月}_detail.html
+  * 單場成績：          https://npb.jp/scores/{年}/{月日}/{主}-{客}-{NN}/box.html
+                        （備援：/bis/{年}/games/s{比賽ID}.html 與英文版）
+  * 未賽場地與預告先發：https://npb.jp/games/{年}/schedule_{月}_detail.html
+  * 年度個人成績：      https://npb.jp/bis/{年}/stats/idb1_{隊}.html、idp1_{隊}.html
+  * 選手個人頁：        https://npb.jp/bis/players/{選手ID}.html
 
 輸出（皆為靜態 JSON，供網頁直接讀取）：
   data/seasons.json                 各年度清單
   data/{年}/schedule.json           該年度全部比賽（季賽、明星賽、季後賽）
   data/{年}/games/{比賽ID}.json      單場詳細（比分、上場名單、個人當場數據）
-  data/{年}/players.json            依單場成績累計的年度個人成績
+  data/{年}/players.json            官方年度個人成績
+  data/{年}/players/{key}.json      選手逐場紀錄
+  data/{年}/names.json              單場成績表上的簡稱 → 選手 key
+  data/players/{選手ID}.json        選手個人資料（照片、全名、背號…）
 
 快取規則：
   * 已結束的比賽，單場 JSON 寫入後永不重抓。
@@ -38,7 +44,7 @@ BASE = "https://npb.jp"
 JST = dt.timezone(dt.timedelta(hours=9))
 MONTHS = ["03", "04", "05", "06", "07", "08", "09", "10", "11"]
 DELAY = float(os.environ.get("NPB_DELAY", "1.0"))
-BOX_SCHEMA = 1  # 解析器版本；調高可讓舊的單場資料在下次執行時重抓
+BOX_SCHEMA = 2  # 解析器版本；調高可讓舊的單場資料在下次執行時重抓
 
 session = requests.Session()
 session.headers.update({
@@ -103,18 +109,28 @@ def write_json(path, obj, pretty=False):
     return True
 
 
+
+
 def clean(s):
     return re.sub(r"\s+", " ", (s or "").replace("　", " ")).strip()
+
+
+def nospace(s):
+    return re.sub(r"[\s　]+", "", s or "")
+
+
+def text_of(cell):
+    return clean(cell.get_text(" "))
 
 
 # ---------------------------------------------------------------- 賽程（月曆）
 
 STAGE_PATTERNS = [
-    (r"all.?star|オールスター", "allstar", "明星賽"),
-    (r"first", "cs1", "高潮系列賽 第一階段"),
-    (r"final", "cs2", "高潮系列賽 最終階段"),
-    (r"climax|\bcs\b|クライマックス", "cs", "高潮系列賽"),
-    (r"japan series|nippon series|日本シリーズ|smbc", "js", "日本一系列賽"),
+    (r"all.?star|オールスター", "allstar"),
+    (r"first", "cs1"),
+    (r"final", "cs2"),
+    (r"climax|\bcs\b|クライマックス", "cs"),
+    (r"japan series|nippon series|日本シリーズ|smbc", "js"),
 ]
 
 STAGE_LABELS = {"regular": "例行賽", "allstar": "明星賽", "cs1": "高潮系列賽 第一階段",
@@ -123,7 +139,7 @@ STAGE_LABELS = {"regular": "例行賽", "allstar": "明星賽", "cs1": "高潮�
 
 def classify_stage(marker):
     m = (marker or "").lower()
-    for pat, code, _ in STAGE_PATTERNS:
+    for pat, code in STAGE_PATTERNS:
         if re.search(pat, m):
             return code
     return "cs" if m else "regular"
@@ -142,9 +158,10 @@ SCHED_RE = re.compile(r"<div[^>]*>\s*([A-Za-z]+)\s*-\s*([A-Za-z]+)\s+(\d{1,2}:\d
 def parse_calendar(html, year, month):
     """解析英文版 BIS 月曆。回傳比賽 dict 的 list。
 
-    已賽：<a href=".../games/s2025032801085.html">G 3 - 1 T</a>（左客右主）
-    延賽：<a ...>G * - * T</a>
-    未賽：<div>C - DB 18:00</div>
+    npb.jp 月曆一律「主隊在左」：
+    已賽：<a href=".../games/s2025032800105.html">G 6 - 5 S</a>（巨人主場 6:5 勝養樂多）
+    延賽：<a ...>G * - * S</a>
+    未賽：<div>S - C 18:00</div>
     季後賽 / 明星賽前方會有 <div class="tescheaten">CS First Stage</div>
     """
     games = []
@@ -176,23 +193,22 @@ def parse_calendar(html, year, month):
                 marker = clean(re.sub(r"<[^>]+>", "", m.group(1)))
                 continue
             if kind == "final":
-                gid, away, a_s, h_s, home = m.groups()
-                g = new_game(gid, date, away, home, marker)
+                gid, home, h_s, a_s, away = m.groups()
+                g = new_game(gid, date, home, away, marker)
                 if "*" in (a_s + h_s):
                     g["status"] = "postponed"
                 else:
                     g["status"] = "final"
-                    g["awayScore"], g["homeScore"] = int(a_s), int(h_s)
+                    g["homeScore"], g["awayScore"] = int(h_s), int(a_s)
             else:
-                away, home, t = m.groups()
-                g = new_game(None, date, away, home, marker)
+                home, away, t = m.groups()
+                g = new_game(None, date, home, away, marker)
                 g["time"] = t.zfill(5)
-            if g:
-                games.append(g)
+            games.append(g)
     return games
 
 
-def new_game(gid, date, away, home, marker):
+def new_game(gid, date, home, away, marker):
     away_c, home_c = resolve(away), resolve(home)
     if {away.upper(), home.upper()} == {"CL", "PL"}:
         stage = "allstar"
@@ -215,66 +231,97 @@ def new_game(gid, date, away, home, marker):
 
 
 def fix_stages(games):
-    """沒有標記時用規則推論季後賽：例行賽最後一天之後的比賽。"""
-    reg = [g for g in games if g["stage"] == "regular"]
+    """沒有標記時用規則推論季後賽：10–11 月的跨聯盟比賽只可能是日本一系列賽。"""
     league = lambda c: TEAMS.get(c, {}).get("league")
-    for g in reg:
-        if g["date"][5:7] not in ("10", "11"):
-            continue
-        la, lh = league(g["away"]), league(g["home"])
-        if la and lh and la != lh:
-            g["stage"] = "js"  # 10–11 月的跨聯盟比賽只可能是日本一系列賽
+    for g in games:
+        if g["stage"] == "regular" and g["date"][5:7] in ("10", "11"):
+            la, lh = league(g["away"]), league(g["home"])
+            if la and lh and la != lh:
+                g["stage"] = "js"
     for g in games:
         g["stageName"] = STAGE_LABELS.get(g["stage"], g["stage"])
     return games
+
+
+KEEP_FIELDS = ("venue", "venueSource", "time", "hasBox", "attendance", "duration",
+               "winP", "loseP", "saveP", "scores")
 
 
 def scrape_schedule(year, old_games):
     """抓整季月曆；過去已抓過的資訊（場地、成績有無）會保留。"""
     games = []
     for mm in MONTHS:
-        url = f"{BASE}/bis/eng/{year}/calendar/index_{mm}.html"
-        html = fetch(url)
+        html = fetch(f"{BASE}/bis/eng/{year}/calendar/index_{mm}.html")
         if html is None:
             continue
         got = parse_calendar(html, year, mm)
         print(f"  calendar {year}-{mm}: {len(got)} games")
         games.extend(got)
 
-    # 去重（3 月與 4 月可能在同一頁）
+    # 去重（3 月與 4 月可能在同一頁）；同一場既有已賽又有未賽版本時保留已賽
     uniq = {}
     for g in games:
-        key = g["id"]
-        if g["status"] == "scheduled":
-            # 已賽版本優先，避免同場既是未賽又是已賽
-            key = (g["date"], g["away"], g["home"])
+        key = (g["date"], g["away"], g["home"]) if g["status"] == "scheduled" else g["id"]
         uniq.setdefault(key, g)
     played = {(g["date"], g["away"], g["home"]) for g in uniq.values() if g["status"] != "scheduled"}
-    games = [g for k, g in uniq.items()
+    games = [g for g in uniq.values()
              if not (g["status"] == "scheduled" and (g["date"], g["away"], g["home"]) in played)]
 
     old = {g["id"]: g for g in old_games}
     for g in games:
         o = old.get(g["id"])
         if o:
-            for k in ("venue", "venueSource", "time", "hasBox", "attendance", "duration",
-                      "winP", "loseP", "saveP"):
+            for k in KEEP_FIELDS:
                 if g.get(k) in (None, False) and o.get(k) not in (None, False):
                     g[k] = o[k]
     games.sort(key=lambda g: (g["date"], g.get("time") or "99", g["id"]))
     return fix_stages(games)
 
 
-# ---------------------------------------------------------------- 場地補充（日文賽程頁）
+# ---------------------------------------------------------------- 未賽：場地、開賽時間、預告先發
 
-def enrich_venues(year, games, months):
-    """未賽比賽在月曆上沒有球場，從日文賽程頁盡力補上；失敗不影響其他流程。"""
-    need = {}
+def parse_schedule_detail(html, year):
+    """解析日文賽程頁。每列：日期 | 主隊 - 客隊 | 球場|時間 | … | 先發：甲|先發：乙"""
+    soup = BeautifulSoup(html or "", "html.parser")
+    out, cur = [], None
+    for tr in soup.find_all("tr"):
+        cells = tr.find_all(["td", "th"])
+        if not cells:
+            continue
+        m = re.match(r"(\d{1,2})/(\d{1,2})", text_of(cells[0]))
+        if m:
+            cur = f"{year}-{int(m.group(1)):02d}-{int(m.group(2)):02d}"
+            cells = cells[1:]
+        if not cur or len(cells) < 2:
+            continue
+        parts = [p for p in cells[0].get_text("|", strip=True).split("|") if p]
+        if len(parts) < 3:
+            continue
+        home, away = resolve_ja(parts[0]), resolve_ja(parts[-1])
+        if not home or not away:
+            continue
+        vt = [p for p in cells[1].get_text("|", strip=True).split("|") if p]
+        link = tr.find("a", href=re.compile(r"/scores/\d{4}/\d{4}/[^/]+/"))
+        row = {"date": cur, "home": home, "away": away,
+               "reserve": "予備日" in parts[1],
+               "scores": re.search(r"/scores/\d{4}/\d{4}/[^/]+/", link["href"]).group(0) if link else None,
+               "venue": nospace(vt[0]) if vt and not re.match(r"\d", vt[0]) else None,
+               "time": next((t for t in vt if re.fullmatch(r"\d{1,2}:\d{2}", t)), None)}
+        if len(cells) >= 4:
+            st = [re.sub(r"^先発\s*[:：]\s*", "", p) for p in cells[3].get_text("|", strip=True).split("|")
+                  if p.startswith("先発")]
+            if len(st) == 2:
+                row["probables"] = {"home": st[0], "away": st[1]}
+        out.append(row)
+    return out
+
+
+def enrich_schedule(year, games, months):
+    """從日文賽程頁補上：所有比賽的 /scores/ 頁面路徑；未賽比賽的場地、時間、預告先發。"""
+    by_key = {(g["date"], g["home"], g["away"]): g for g in games}
     for g in games:
-        if not g.get("venue"):
-            need.setdefault(g["date"], []).append(g)
-    if not need:
-        return
+        if g["status"] == "scheduled":
+            g.pop("probables", None)
     for mm in months:
         try:
             html = fetch(f"{BASE}/games/{year}/schedule_{mm}_detail.html")
@@ -283,40 +330,31 @@ def enrich_venues(year, games, months):
             continue
         if not html:
             continue
-        soup = BeautifulSoup(html, "html.parser")
-        cur_date = None
         hit = 0
-        for tr in soup.find_all("tr"):
-            text = clean(tr.get_text(" "))
-            dm = re.search(r"(\d{1,2})\s*[/月]\s*(\d{1,2})", text)
-            if dm and 1 <= int(dm.group(1)) <= 12:
-                cur_date = f"{year}-{int(dm.group(1)):02d}-{int(dm.group(2)):02d}"
-            if not cur_date or cur_date not in need:
+        for row in parse_schedule_detail(html, year):
+            g = by_key.get((row["date"], row["home"], row["away"]))
+            if not g:
                 continue
-            codes = teams_in_text(text)
-            if len(codes) < 2:
+            hit += 1
+            if row.get("scores") and g["status"] != "scheduled":
+                g["scores"] = row["scores"]
+            if g["status"] != "scheduled":
                 continue
-            venue = find_venue(text)
-            tm = re.search(r"(\d{1,2}):(\d{2})", text)
-            for g in need[cur_date]:
-                if {g["away"], g["home"]} == set(codes[:2]):
-                    if venue and not g.get("venue"):
-                        g["venue"], g["venueSource"] = venue, "schedule"
-                        hit += 1
-                    if tm and not g.get("time"):
-                        g["time"] = f"{int(tm.group(1)):02d}:{tm.group(2)}"
-        print(f"  schedule detail {year}-{mm}: venues filled {hit}")
-
-
-def teams_in_text(text):
-    from teams import JA_NAMES
-    found = []
-    for name, code in sorted(JA_NAMES.items(), key=lambda kv: -len(kv[0])):
-        idx = text.find(name)
-        if idx >= 0 and code not in [c for _, c in found]:
-            found.append((idx, code))
-            text = text.replace(name, "　" * len(name))
-    return [c for _, c in sorted(found)]
+            if row["venue"]:
+                g["venue"], g["venueSource"] = row["venue"], "schedule"
+            if row["time"]:
+                g["time"] = row["time"].zfill(5)
+            if row.get("probables"):
+                g["probables"] = row["probables"]
+        print(f"  schedule detail {year}-{mm}: matched {hit}")
+    # 季後賽不在公式戰賽程頁：/scores/{年}/{月日}/{主}-{客}-{該系列第幾戰}/
+    n = {}
+    for g in games:
+        if g["stage"] in ("cs1", "cs2", "cs", "js") and g["status"] == "final":
+            k = (g["stage"], frozenset((g["home"], g["away"])))
+            n[k] = n.get(k, 0) + 1
+            g.setdefault("scores", f"/scores/{year}/{g['date'][5:7]}{g['date'][8:]}/"
+                                   f"{g['home'].lower()}-{g['away'].lower()}-{n[k]:02d}/")
 
 
 def find_venue(text):
@@ -329,84 +367,123 @@ def find_venue(text):
 
 # ---------------------------------------------------------------- 單場成績
 
-BAT_KEYS = ["打数", "AB"]
-PIT_KEYS = ["投球回", "IP", "回数", "投球数", "NP"]
-TOTAL_NAMES = {"計", "合計", "チーム計", "Totals", "Total", "TOTAL", "TOTALS"}
-PLAYER_LINK_RE = re.compile(r"/bis/(?:eng/)?players/(\d+)\.html")
+BAT_KEYS = ("打数", "AB")
+PIT_KEYS = ("投回", "投球回", "IP")
+DECISION_MARKS = {"○": "W", "●": "L", "S": "SV", "H": "HLD", "Ｓ": "SV", "Ｈ": "HLD"}
 
 
 def table_rows(table):
+    """表格 → [(cells, is_header_row)]；表頭文字去空白（npb.jp 用直排「打|数」）。"""
     rows = []
     for tr in table.find_all("tr"):
         cells = tr.find_all(["th", "td"])
         if not cells:
             continue
-        row = [clean(c.get_text(" ")) for c in cells]
-        # 展開 colspan，讓欄位對齊表頭
+        is_th = all(c.name == "th" for c in cells)
         out = []
-        for c, txt in zip(cells, row):
+        for c in cells:
+            out.append(nospace(c.get_text("")) if is_th else text_of(c))
             try:
                 span = int(c.get("colspan", 1))
             except ValueError:
                 span = 1
-            out.append(txt)
             out.extend([""] * (min(span, 30) - 1))
-        # 選手連結 → npb.jp 選手 ID（用於選手頁、照片、個人資料）
-        pid = None
-        for a in tr.find_all("a", href=True):
-            m = PLAYER_LINK_RE.search(a["href"])
-            if m:
-                pid = m.group(1)
-                break
-        rows.append((out, all(c.name == "th" for c in cells), pid))
+        rows.append((out, is_th))
     return rows
 
 
-def is_header(row, keys):
-    return any(cell in keys for cell in row)
+def leaf_tables(soup):
+    return [t for t in soup.find_all("table") if not t.find("table")]
 
 
 def split_table(rows, keys):
-    """回傳 (表頭, 資料列, 各列選手 ID)。"""
-    for i, (row, _, _) in enumerate(rows):
-        if is_header(row, keys):
-            body = [(r, pid) for r, _, pid in rows[i + 1:] if any(r) and not is_header(r, keys)]
-            return row, [r for r, _ in body], [pid for _, pid in body]
-    return None, [], []
+    for i, (row, _) in enumerate(rows):
+        if any(c in keys for c in row):
+            return row, [r for r, _ in rows[i + 1:] if any(r) and not any(c in keys for c in r)]
+    return None, []
 
 
-def team_near(table):
-    """往表格前面找最近出現的隊名。"""
-    n = 0
-    for s in table.find_all_previous(string=True):
-        t = clean(s)
-        if not t:
+def label_headers(h, rows, pitching):
+    """補上空白表頭（npb.jp 的守備位置、選手名欄沒有標題）。"""
+    h = list(h)
+    vals = lambda i: [r[i] for r in rows if i < len(r) and r[i]]
+    name_label = "投手" if pitching else "選手"
+    if name_label in h:
+        return h
+    for i, x in enumerate(h):
+        if x:
+            if x in PIT_KEYS:
+                h[i] = "投球回"
             continue
-        code = resolve_ja(t)
-        if code:
-            return code
-        for c, info in TEAMS.items():
-            if info["ja"] in t:
-                return c
-        n += 1
-        if n > 8:
-            break
-    return None
+        v = vals(i)
+        if not v:
+            continue
+        if not pitching and sum(bool(re.match(r"[(（]", s)) for s in v) >= len(v) / 2:
+            h[i] = "守備"
+        elif pitching and all(s in DECISION_MARKS or s in ("+",) or re.fullmatch(r"\.\d", s) for s in v):
+            continue
+        elif name_label not in h and sum(not re.fullmatch(r"[\d.+\-/ ]+", s) for s in v) >= len(v) * 0.8:
+            h[i] = name_label
+    return h
 
 
 def parse_linescore(table):
-    rows = table_rows(table)
-    for i, (row, _, _) in enumerate(rows):
-        nums = [c for c in row if re.fullmatch(r"\d{1,2}", c)]
-        if nums[:3] == ["1", "2", "3"] and any(c in ("計", "R", "得点") for c in row):
-            data = [r for r, _, _ in rows[i + 1:i + 3] if any(r)]
-            return {"headers": row, "rows": data}
-    return None
+    """逐局比分。npb.jp：td.gmscoreteam | 每局… | - | R | H | E（每三局有空白分隔欄）。"""
+    if not table.select("td.gmscoreteam") and not any(
+            {"R", "H", "E"} <= {nospace(c.get_text("")).translate(FW) for c in tr.find_all(["td", "th"])}
+            for tr in table.find_all("tr")):
+        return None
+    lines = []
+    for tr in table.find_all("tr"):
+        cells = [text_of(c) for c in tr.find_all(["td", "th"])]
+        if len(cells) < 5 or not cells[0] or re.fullmatch(r"[\dＲＨＥRHE]", cells[0]):
+            continue
+        vals = [v for v in cells[1:] if v != ""]
+        if len(vals) >= 4 and vals[-4] == "-":
+            inn, rhe = vals[:-4], vals[-3:]
+        elif len(vals) >= 4:
+            inn, rhe = vals[:-3], vals[-3:]
+        else:
+            continue
+        if not all(re.fullmatch(r"\d+", x) for x in rhe):
+            continue
+        lines.append((cells[0], inn, rhe))
+    if len(lines) < 2:
+        return None
+    n = max(len(x[1]) for x in lines[:2])
+    return {"headers": [""] + [str(i + 1) for i in range(n)] + ["R", "H", "E"],
+            "rows": [[nm] + inn + [""] * (n - len(inn)) + rhe for nm, inn, rhe in lines[:2]]}
+
+
+FW = str.maketrans("ＲＨＥ０１２３４５６７８９", "RHE0123456789")
+
+
+def parse_labels(soup):
+    """「勝投手 ： 某某 ( 1勝0敗 )」這類兩欄的列；空白標籤的列延續上一個標籤。"""
+    out, cur = {}, None
+    for tr in soup.find_all("tr"):
+        cells = tr.find_all("td", recursive=False) or tr.find_all("td")
+        if len(cells) != 2:
+            cur = None
+            continue
+        lab, val = text_of(cells[0]), text_of(cells[1])
+        m = re.fullmatch(r"(.{1,8}?)\s*[:：]", lab)
+        if m:
+            cur = nospace(m.group(1))
+            out.setdefault(cur, []).append(val)
+        elif not lab and cur and val:
+            out[cur].append(val)
+        else:
+            cur = None
+    return out
 
 
 def parse_box(html, game):
     soup = BeautifulSoup(html, "html.parser")
-    text = clean(soup.get_text(" "))
+    full = clean(soup.get_text(" "))
+    y, mo, d = game["date"].split("-")
+    i = full.find(f"{int(y)}年{int(mo)}月{int(d)}日")
+    text = full[i:] if i >= 0 else full  # 略過頁首「今日賽程」跑馬燈
     box = {"id": game["id"], "schema": BOX_SCHEMA, "date": game["date"],
            "away": game["away"], "home": game["home"],
            "awayScore": game.get("awayScore"), "homeScore": game.get("homeScore"),
@@ -415,319 +492,346 @@ def parse_box(html, game):
                      game["home"]: {"batting": None, "pitching": None}},
            "info": {}}
 
-    leaves = [t for t in soup.find_all("table") if not t.find("table")]
     bat_tables, pit_tables = [], []
-    for t in leaves:
-        rows = table_rows(t)
-        flat = [c for r, _, _ in rows for c in r]
+    for t in leaf_tables(soup):
         if box["linescore"] is None:
             ls = parse_linescore(t)
             if ls:
+                ls["teams"] = [game["away"], game["home"]]  # 先攻（客隊）在上
                 box["linescore"] = ls
                 continue
-        if any(k in flat for k in BAT_KEYS):
-            h, d, ids = split_table(rows, BAT_KEYS)
-            if h and d:
-                bat_tables.append((t, h, d, ids))
-        elif any(k in flat for k in PIT_KEYS):
-            h, d, ids = split_table(rows, PIT_KEYS)
-            if h and d:
-                pit_tables.append((t, h, d, ids))
+        rows = table_rows(t)
+        flat = {c for r, _ in rows for c in r}
+        if flat & set(BAT_KEYS):
+            h, d_ = split_table(rows, BAT_KEYS)
+            if h and d_:
+                bat_tables.append((t, label_headers(h, d_, False), d_))
+        elif flat & set(PIT_KEYS):
+            h, d_ = split_table(rows, PIT_KEYS)
+            if h and d_:
+                pit_tables.append((t, label_headers(h, d_, True), d_))
 
-    order = [game["away"], game["home"]]  # 慣例：先攻（客隊）在前
+    # npb.jp 單場頁的打擊、投手表都是先攻（客隊）在前、後攻（主隊）在後
+    order = [game["away"], game["home"]]
     for kind, tables in (("batting", bat_tables), ("pitching", pit_tables)):
-        used = set()
-        for idx, (t, h, d, ids) in enumerate(tables):
-            code = team_near(t)
-            if code not in order or code in used:
-                code = next((c for c in order if c not in used), None) if idx < 2 else None
-            if code is None:
-                continue
-            used.add(code)
-            box["teams"][code][kind] = {"headers": h, "rows": d}
-            if any(ids):
-                box["teams"][code][kind]["pids"] = ids
+        for code, (t, h, d_) in zip(order, tables[:2]):
+            box["teams"][code][kind] = {"headers": h, "rows": d_}
 
     info = box["info"]
-    m = re.search(r"([\d,]{3,})\s*人", text) or re.search(r"(?:入場者数?|Att(?:endance)?\.?)\s*[:：]?\s*([\d,]+)", text)
+    m = re.search(r"入場者\s*[-－:：]?\s*([\d,]+)", text) or re.search(r"([\d,]{3,})\s*人", text)
     if m:
         info["attendance"] = int(m.group(1).replace(",", ""))
-    m = re.search(r"(?:開始|Start)\s*[:：]?\s*(\d{1,2})\s*[:：時]\s*(\d{2})", text)
+    m = re.search(r"開始\s*[:：]?\s*(\d{1,2})\s*[:：時]\s*(\d{2})", text)
     if m:
         info["start"] = f"{int(m.group(1)):02d}:{m.group(2)}"
-    m = re.search(r"(?:試合時間|Time of Game|Time)\s*[:：]?\s*(\d{1,2})\s*(?:[:：]|時間)\s*(\d{1,2})", text)
+    m = re.search(r"試合時間\s*[-－:：]?\s*(\d{1,2})\s*(?:[:：]|時間)\s*(\d{1,2})", text)
     if m:
         info["duration"] = f"{int(m.group(1))}:{int(m.group(2)):02d}"
-    venue = find_venue(text)
+    m = re.search(r"(\d+)回戦\s*\(\s*(.+?)\s*\)", text)
+    if m:
+        info["series"] = f"第{m.group(1)}戰（{m.group(2)}）"
+    m = re.search(r"\(\s*(延長\d+回[^)]*|\d+回[^)]*(?:コールド|降雨)[^)]*)\s*\)", text)
+    if m:
+        info["note"] = m.group(1).strip()
+    # 球場：「試合時間」所在儲存格的前一格
+    venue = None
+    node = soup.find(string=re.compile("試合時間"))
+    if node and node.find_parent("td"):
+        prev = node.find_parent("td").find_previous_sibling("td")
+        if prev and text_of(prev) and not re.search(r"\d", text_of(prev)):
+            venue = nospace(text_of(prev))
+    venue = venue or find_venue(text)
     if venue:
         info["venue"] = venue
-    for key, pats in (("winP", [r"勝(?:利)?投手", r"\bWP\b", r"Winning Pitcher"]),
-                      ("loseP", [r"敗(?:戦)?投手", r"\bLP\b", r"Losing Pitcher"]),
-                      ("saveP", [r"セーブ", r"\bSV\b", r"Save"])):
-        for p in pats:
-            m = re.search(p + r"\s*[:：]?\s*[［\[(（]?\s*([^\s\]］)）0-9]{1,12})", text)
-            if m:
-                info[key] = m.group(1)
-                break
-    m = re.search(r"(?:本塁打|HR)\s*[:：]\s*(.{1,200}?)(?:二塁打|三塁打|盗塁|審判|$)", text)
-    if m:
-        info["homeRuns"] = clean(m.group(1))
-    m = re.search(r"(?:審判|Umpires?)\s*[:：]?\s*(.{1,80}?)(?:試合時間|入場者|$)", text)
-    if m:
-        info["umpires"] = clean(m.group(1))
+    labels = parse_labels(soup)
+    for lab, key in (("勝投手", "winP"), ("敗投手", "loseP"), ("セーブ", "saveP")):
+        if labels.get(lab):
+            info[key] = re.sub(r"\s*[(（].*$", "", labels[lab][0]).strip()
+    if labels.get("本塁打"):
+        info["homeRuns"] = " / ".join(labels["本塁打"])
+    for lab, vals in labels.items():
+        if lab not in ("勝投手", "敗投手", "セーブ", "本塁打"):
+            info.setdefault("extra", {})[lab] = " / ".join(vals)
 
     box["ok"] = bool(bat_tables) or box["linescore"] is not None
     return box
 
 
+def own_rows(table):
+    """只取表格自己的列（略過儲存格內巢狀表格的列）。"""
+    return [tr for tr in table.find_all("tr") if tr.find_parent("table") is table]
+
+
+def own_cells(tr):
+    cells = []
+    for c in tr.find_all(["td", "th"], recursive=False):
+        inner = c.find("table")
+        if inner:  # 投球回：<th>6</th><td>1/3</td>
+            cells.append(clean(" ".join(x.get_text(" ", strip=True) for x in inner.find_all(["th", "td"]))))
+        else:
+            cells.append(text_of(c))
+    return cells
+
+
+def parse_scores_table(table):
+    rows = own_rows(table)
+    if not rows:
+        return None
+    headers = [nospace(c.get_text("")) for c in rows[0].find_all(["td", "th"], recursive=False)]
+    out, pids = [], []
+    for tr in rows[1:]:
+        cells = own_cells(tr)
+        if not any(cells):
+            continue
+        a = tr.find("a", href=re.compile(r"/bis/players/\d+\.html"))
+        out.append(cells)
+        pids.append(re.search(r"/players/(\d+)\.html", a["href"]).group(1) if a else None)
+    return {"headers": headers, "rows": out, "pids": pids}
+
+
+def parse_scores_box(html, game):
+    """解析 npb.jp/scores/{年}/{月日}/{主}-{客}-{NN}/box.html（含選手 ID、每打席結果、用球數）。"""
+    soup = BeautifulSoup(html, "html.parser")
+    box = {"id": game["id"], "schema": BOX_SCHEMA, "date": game["date"],
+           "away": game["away"], "home": game["home"],
+           "awayScore": game.get("awayScore"), "homeScore": game.get("homeScore"),
+           "stage": game.get("stage"), "linescore": None,
+           "teams": {game["away"]: {"batting": None, "pitching": None},
+                     game["home"]: {"batting": None, "pitching": None}},
+           "info": {}}
+    ls = soup.find(id="tablefix_ls")
+    if ls:
+        rows = own_rows(ls)
+        head = [text_of(c) for c in rows[0].find_all(["td", "th"], recursive=False)]
+        body = []
+        for tr in rows[1:3]:
+            cells = tr.find_all(["td", "th"], recursive=False)
+            body.append([""] + [text_of(c) for c in cells[1:]])
+        if len(body) == 2:
+            head = [""] + ["R" if h == "計" else h for h in head[1:]]
+            box["linescore"] = {"headers": head, "rows": body, "teams": [game["away"], game["home"]]}
+    # t = 表（先攻＝客隊）、b = 裏（後攻＝主隊）
+    for side, code in (("t", game["away"]), ("b", game["home"])):
+        for kind, suffix in (("batting", "b"), ("pitching", "p")):
+            t = soup.find(id=f"tablefix_{side}_{suffix}")
+            if t:
+                tb = parse_scores_table(t)
+                if tb:
+                    box["teams"][code][kind] = tb
+
+    info = box["info"]
+    place = soup.select_one("span.place")
+    if place and text_of(place):
+        info["venue"] = nospace(text_of(place))
+    gi = text_of(soup.select_one("p.game_info")) if soup.select_one("p.game_info") else ""
+    m = re.search(r"開始\s*(\d{1,2}):(\d{2})", gi)
+    if m:
+        info["start"] = f"{int(m.group(1)):02d}:{m.group(2)}"
+    m = re.search(r"試合時間\s*(\d{1,2})時間(\d{1,2})分", gi)
+    if m:
+        info["duration"] = f"{int(m.group(1))}:{int(m.group(2)):02d}"
+    m = re.search(r"入場者\s*([\d,]+)", gi)
+    if m:
+        info["attendance"] = int(m.group(1).replace(",", ""))
+    h3 = soup.find("h3")
+    if h3:
+        m = re.search(r"(\d+)回戦", text_of(h3))
+        if m:
+            info["series"] = f"第{m.group(1)}戰"
+    # 勝敗投手：投手表第一欄的 ○ ● S
+    for t in box["teams"].values():
+        p = t.get("pitching")
+        if not p:
+            continue
+        for r in p["rows"]:
+            mark = DECISION_MARKS.get(r[0]) if r else None
+            key = {"W": "winP", "L": "loseP", "SV": "saveP"}.get(mark)
+            if key and len(r) > 1:
+                info[key] = r[1]
+    # 全壘打：打擊表每打席結果中含「本」
+    hrs = []
+    for code in (game["away"], game["home"]):
+        b = box["teams"][code].get("batting")
+        if not b:
+            continue
+        h = b["headers"]
+        ni = h.index("選手") if "選手" in h else 2
+        for r in b["rows"]:
+            for i, c in enumerate(r):
+                if i < len(h) and re.fullmatch(r"\d+", h[i] or "") and "本" in c:
+                    hrs.append(f"［{TEAMS.get(code, {}).get('ja', code)}］{r[ni]}（{h[i]}局 {c}）")
+    if hrs:
+        info["homeRuns"] = " / ".join(hrs)
+    m = re.search(r"\(\s*(延長\d+回[^)]*)\)", gi)
+    if m:
+        info["note"] = m.group(1).strip()
+    if box["linescore"] and len(box["linescore"]["headers"]) > 13:
+        info.setdefault("note", f"延長{len(box['linescore']['headers']) - 4}回")
+
+    box["ok"] = any(t.get("batting") for t in box["teams"].values())
+    return box
+
+
 def scrape_box(year, game):
-    for url in (f"{BASE}/bis/{year}/games/s{game['id']}.html",
-                f"{BASE}/bis/eng/{year}/games/s{game['id']}.html"):
+    cands = []
+    if game.get("scores"):
+        cands.append((f"{BASE}{game['scores']}box.html", parse_scores_box))
+    cands += [(f"{BASE}/bis/{year}/games/s{game['id']}.html", parse_box),
+              (f"{BASE}/bis/eng/{year}/games/s{game['id']}.html", parse_box)]
+    for url, parser in cands:
         try:
             html = fetch(url)
         except Exception as e:  # noqa: BLE001
             print(f"  box {game['id']} {url} failed: {e}")
             continue
         if html:
-            box = parse_box(html, game)
+            box = parser(html, game)
             box["source"] = url
             if box["ok"]:
                 return box
     return None
 
 
-# ---------------------------------------------------------------- 年度個人成績
+# ---------------------------------------------------------------- 年度個人成績（官方）
 
-def col(headers, *names):
-    for n in names:
-        for i, h in enumerate(headers):
-            if h == n:
-                return i
-    for n in names:
-        for i, h in enumerate(headers):
-            if n in h and len(h) <= len(n) + 2:
-                return i
-    return None
-
-
-def name_col(headers, rows, pitching=False):
-    if pitching:
-        i = col(headers, "投手", "投手名", "選手", "選手名", "Player", "Name", "PITCHERS", "Pitcher")
-    else:
-        i = col(headers, "選手", "選手名", "打者", "Player", "Name", "BATTERS", "Batter")
-    if i is not None:
-        return i
-    # 退而求其次：第一個「看起來像人名」的欄位
-    for i in range(len(headers)):
-        vals = [r[i] for r in rows if i < len(r)]
-        if vals and sum(bool(re.search(r"[^\d\s.\-/()（）]", v)) and len(v) >= 2 for v in vals) > len(vals) * 0.6:
-            return i
-    return 0
+BAT_COLS = {"試合": "G", "打席": "PA", "打数": "AB", "得点": "R", "安打": "H", "二塁打": "2B",
+            "三塁打": "3B", "本塁打": "HR", "塁打": "TB", "打点": "RBI", "盗塁": "SB", "盗塁刺": "CS",
+            "犠打": "SH", "犠飛": "SF", "四球": "BB", "故意四": "IBB", "死球": "HBP", "三振": "SO",
+            "併殺打": "GDP", "打率": "AVG", "長打率": "SLG", "出塁率": "OBP"}
+PIT_COLS = {"登板": "G", "勝利": "W", "敗北": "L", "セーブ": "SV", "ホールド": "HLD", "HP": "HP",
+            "ＨＰ": "HP", "完投": "CG", "完封勝": "SHO", "無四球": "NBB", "勝率": "PCT", "打者": "BF",
+            "投球回": "IP", "安打": "H", "本塁打": "HR", "四球": "BB", "故意四": "IBB", "死球": "HBP",
+            "三振": "SO", "暴投": "WP", "ボーク": "BK", "失点": "R", "自責点": "ER", "防御率": "ERA"}
+TEAM_URL_CODES = {"DB": ["db", "yb"], "B": ["b", "bs"]}
 
 
 def num(v):
     v = (v or "").replace(",", "").strip()
+    if v in ("", "-", "----"):
+        return None
     try:
         return int(v)
     except ValueError:
         try:
             return float(v)
         except ValueError:
-            return 0
+            return None
 
 
 def innings_to_outs(v):
+    """'7 2/3'、'5.1'（=5又1/3）、'12 .1'、'8' → 出局數。"""
     v = clean(v).replace("⅓", " 1/3").replace("⅔", " 2/3")
     m = re.fullmatch(r"(\d+)?\s*(?:\+?\s*([12])\s*/\s*3)?", v)
     if m and (m.group(1) or m.group(2)):
         return int(m.group(1) or 0) * 3 + int(m.group(2) or 0)
-    m = re.fullmatch(r"(\d+)\.([012])", v)
+    m = re.fullmatch(r"(\d*)\s*\.([012])", v)
     if m:
-        return int(m.group(1)) * 3 + int(m.group(2))
+        return int(m.group(1) or 0) * 3 + int(m.group(2))
     return 0
 
 
-BAT_STATS = {"G": None, "AB": ("打数", "AB"), "R": ("得点", "R"), "H": ("安打", "H"),
-             "RBI": ("打点", "RBI"), "HR": ("本塁打", "HR"), "BB": ("四球", "四死球", "BB"),
-             "SO": ("三振", "SO"), "SB": ("盗塁", "SB")}
-PIT_STATS = {"G": None, "OUTS": None, "H": ("被安打", "安打", "H"), "R": ("失点", "R"),
-             "ER": ("自責点", "自責", "ER"), "BB": ("四球", "与四球", "四死球", "BB"),
-             "SO": ("三振", "奪三振", "SO"), "NP": ("投球数", "球数", "NP"),
-             "W": None, "L": None, "SV": None}
+def outs_to_ip(o):
+    return f"{o // 3}" + ("" if o % 3 == 0 else f" {o % 3}/3")
 
 
-BAT_LOG = ["AB", "R", "H", "RBI", "HR", "BB", "SO", "SB"]
-PIT_LOG = ["OUTS", "H", "R", "ER", "BB", "SO", "NP"]
-
-
-def player_key(pid, team, name):
-    """有 npb.jp 選手 ID 就用 ID，否則用「隊伍_姓名」。"""
-    return pid if pid else f"{team}_{re.sub(r'[^0-9A-Za-z一-鿿ぁ-んァ-ヿ々ー]', '', name)}"
-
-
-def build_players(year, games):
-    """累計年度個人成績，並輸出每位選手的逐場紀錄 data/{年}/players/{key}.json。"""
-    bat, pit, logs = {}, {}, {}
-    gdir = os.path.join(DATA, str(year), "games")
-    for g in games:
-        if g["stage"] != "regular" or not g.get("hasBox"):
+def parse_stats_page(html, pitching):
+    soup = BeautifulSoup(html or "", "html.parser")
+    t = soup.find("table", class_="tablefix2")
+    if t is None:
+        cands = [x for x in leaf_tables(soup) if "選手" in {nospace(c.get_text("")) for c in x.find_all("th")}]
+        t = cands[0] if cands else None
+    if t is None:
+        return []
+    cols = PIT_COLS if pitching else BAT_COLS
+    header, out = None, []
+    for tr in t.find_all("tr"):
+        ths = tr.find_all("th")
+        if ths and not tr.find("td"):
+            header = [nospace(c.get_text("")) for c in ths]
             continue
-        box = read_json(os.path.join(gdir, f"{g['id']}.json"))
-        if not box:
+        tds = tr.find_all("td")
+        if not header or len(tds) < len(header) // 2:
             continue
-        info = box.get("info", {})
-        for team, t in box.get("teams", {}).items():
-            opp = g["home"] if team == g["away"] else g["away"]
-            ha = "A" if team == g["away"] else "H"
-            b = t.get("batting")
-            if b and b.get("headers"):
-                h, rows, pids = b["headers"], b["rows"], b.get("pids") or []
-                ni = name_col(h, rows)
-                idx = {k: (col(h, *v) if v else None) for k, v in BAT_STATS.items()}
-                for ri, r in enumerate(rows):
-                    nm = clean(r[ni] if ni < len(r) else "").lstrip("()（）")
-                    if not nm or nm in TOTAL_NAMES or re.fullmatch(r"[\d\s]+", nm):
-                        continue
-                    pid = pids[ri] if ri < len(pids) else None
-                    key = player_key(pid, team, nm)
-                    p = bat.setdefault(key, {"key": key, "id": pid, "team": team, "name": nm,
-                                             **{k: 0 for k in BAT_STATS}})
-                    p["team"] = team
-                    p["G"] += 1
-                    line = {k: 0 for k in BAT_LOG}
-                    for k, i in idx.items():
-                        if i is not None and i < len(r):
-                            p[k] += num(r[i])
-                            if k in line:
-                                line[k] = num(r[i])
-                    lg = logs.setdefault(key, {"key": key, "id": pid, "name": nm, "team": team, "bat": [], "pit": []})
-                    lg["bat"].append([g["id"], g["date"], opp, ha] + [line[k] for k in BAT_LOG])
-            for pt in [t["pitching"]] if t.get("pitching") else []:
-                h, rows, pids = pt["headers"], pt["rows"], pt.get("pids") or []
-                ni = name_col(h, rows, pitching=True)
-                ip_i = col(h, "投球回", "IP", "回数")
-                idx = {k: (col(h, *v) if v else None) for k, v in PIT_STATS.items()}
-                for ri, r in enumerate(rows):
-                    nm = clean(r[ni] if ni < len(r) else "")
-                    if not nm or nm in TOTAL_NAMES:
-                        continue
-                    nm_plain = re.sub(r"^(?:[○●◯△]\s*|[勝敗SHＳＨ]\s+)|\s*[(（].*$", "", nm).strip()
-                    pid = pids[ri] if ri < len(pids) else None
-                    key = player_key(pid, team, nm_plain)
-                    p = pit.setdefault(key, {"key": key, "id": pid, "team": team, "name": nm_plain,
-                                             **{k: 0 for k in PIT_STATS}})
-                    p["team"] = team
-                    p["G"] += 1
-                    line = {k: 0 for k in PIT_LOG}
-                    if ip_i is not None and ip_i < len(r):
-                        outs = innings_to_outs(r[ip_i])
-                        # 部分頁面把 1/3 局拆成下一欄
-                        if ip_i + 1 < len(r) and re.fullmatch(r"[12]\s*/\s*3", r[ip_i + 1] or ""):
-                            outs += int(r[ip_i + 1].strip()[0])
-                        p["OUTS"] += outs
-                        line["OUTS"] = outs
-                    for k, i in idx.items():
-                        if i is not None and i < len(r):
-                            p[k] += num(r[i])
-                            if k in line:
-                                line[k] = num(r[i])
-                    dec = ""
-                    for key_, stat in (("winP", "W"), ("loseP", "L"), ("saveP", "SV")):
-                        if info.get(key_) and info[key_] in nm_plain:
-                            p[stat] += 1
-                            dec = stat
-                    lg = logs.setdefault(key, {"key": key, "id": pid, "name": nm_plain, "team": team, "bat": [], "pit": []})
-                    lg["pit"].append([g["id"], g["date"], opp, ha] + [line[k] for k in PIT_LOG] + [dec])
-    for p in bat.values():
-        p["AVG"] = round(p["H"] / p["AB"], 3) if p["AB"] else None
-    for p in pit.values():
-        ip = p["OUTS"] / 3
-        p["IP"] = f"{p['OUTS'] // 3}" + ("" if p["OUTS"] % 3 == 0 else f" {p['OUTS'] % 3}/3")
-        p["ERA"] = round(p["ER"] * 9 / ip, 2) if ip else None
-
-    # 合併選手個人資料（照片、全名、背號、守備位置）
-    for p in list(bat.values()) + list(pit.values()):
-        prof = read_json(os.path.join(DATA, "players", f"{p['id']}.json")) if p.get("id") else None
-        if prof:
-            for k in ("fullName", "kana", "photo", "number", "position"):
-                if prof.get(k):
-                    p[k] = prof[k]
-
-    pdir = os.path.join(DATA, str(year), "players")
-    for key, lg in logs.items():
-        lg["batCols"], lg["pitCols"] = BAT_LOG, PIT_LOG + ["DEC"]
-        write_json(os.path.join(pdir, f"{key}.json"), lg)
-    return {"year": year, "batting": sorted(bat.values(), key=lambda p: (-p["AB"], p["name"])),
-            "pitching": sorted(pit.values(), key=lambda p: (-p["OUTS"], p["name"]))}
+        name = re.sub(r"^[*+＊＋\s]+", "", text_of(tds[0]))
+        if not name or name in ("合計", "計"):
+            continue
+        p = {"name": name}
+        for h, td in zip(header[1:], tds[1:]):
+            k = cols.get(h)
+            if not k:
+                continue
+            raw = nospace(td.get_text(""))
+            if k == "IP":
+                p["OUTS"] = innings_to_outs(raw)
+                p["IP"] = outs_to_ip(p["OUTS"])
+            else:
+                p[k] = num(raw)
+        out.append(p)
+    return out
 
 
-# ---------------------------------------------------------------- 選手個人資料
+def fetch_official_stats(year):
+    """回傳 {'batting': [...], 'pitching': [...]}，每筆含 team；抓不到時回傳 None。"""
+    res = {"batting": [], "pitching": []}
+    ok = 0
+    for code in [c for c in TEAMS]:
+        for kind, prefix in (("batting", "idb1"), ("pitching", "idp1")):
+            for uc in TEAM_URL_CODES.get(code, [code.lower()]):
+                try:
+                    html = fetch(f"{BASE}/bis/{year}/stats/{prefix}_{uc}.html")
+                except Exception as e:  # noqa: BLE001
+                    print(f"  stats {prefix}_{uc} failed: {e}")
+                    html = None
+                if html:
+                    rows = parse_stats_page(html, kind == "pitching")
+                    if rows:
+                        for r in rows:
+                            r["team"] = code
+                        res[kind].extend(rows)
+                        ok += 1
+                        break
+    print(f"{year}: official stats pages {ok}/24")
+    return res if ok else None
 
-PROFILE_KEYS = ["ポジション", "投打", "身長／体重", "身長/体重", "生年月日", "経歴", "ドラフト",
-                "出身地", "背番号", "Position", "Bats / Throws", "Height / Weight", "Born", "Draft"]
-KANA_RE = re.compile(r"^[ぁ-んァ-ヶー・\s　]{3,}$")
+
+# ---------------------------------------------------------------- 現役名單與選手個人資料
+
+PROFILE_KEYS = ["ポジション", "投打", "身長／体重", "身長/体重", "生年月日", "経歴", "ドラフト", "出身地"]
 
 
 def parse_profile(html, pid):
-    soup = BeautifulSoup(html, "html.parser")
+    soup = BeautifulSoup(html or "", "html.parser")
     prof = {"id": pid, "url": f"{BASE}/bis/players/{pid}.html"}
-    title = clean(soup.title.get_text()) if soup.title else ""
-    name = re.split(r"[（(|｜]", title)[0].strip() if title else ""
-    h1 = soup.find(["h1", "h2"])
-    if not name and h1:
-        name = clean(h1.get_text())
-    if name:
-        prof["fullName"] = name
-    for st in soup.find_all(string=True):
-        t = clean(st)
-        if KANA_RE.match(t) and len(t) <= 20:
-            prof["kana"] = t
-            break
+    sel = lambda css: soup.select_one(css)
+    # 頁面上有兩個 id="pc_v_name"（外層容器與姓名本身），取文字最短的那個
+    names = sorted((text_of(x) for x in soup.select("#pc_v_name") if text_of(x)), key=len)
+    if names:
+        prof["fullName"] = names[0]
+    elif soup.title:
+        prof["fullName"] = clean(re.split(r"[（(|｜]", soup.title.get_text())[0])
+    for css, key in (("#pc_v_kana", "kana"), ("#pc_v_no", "number"), ("#pc_v_team", "teamName")):
+        el = sel(css)
+        if el and text_of(el):
+            prof[key] = text_of(el)
+    img = sel("#pc_v_photo img")
+    if img and img.get("src"):
+        prof["photo"] = requests.compat.urljoin(prof["url"], img["src"])
     fields = {}
     for tr in soup.find_all("tr"):
         th, td = tr.find("th"), tr.find("td")
         if th and td:
-            k, v = clean(th.get_text()), clean(td.get_text(" "))
-            if k and v and len(k) <= 12 and len(v) <= 160:
+            k, v = text_of(th), text_of(td)
+            if k in PROFILE_KEYS and v:
                 fields.setdefault(k, v)
-    for dt_ in soup.find_all("dt"):
-        dd = dt_.find_next_sibling("dd")
-        if dd:
-            k, v = clean(dt_.get_text()), clean(dd.get_text(" "))
-            if k and v and len(k) <= 12 and len(v) <= 160:
-                fields.setdefault(k, v)
-    prof["fields"] = {k: v for k, v in fields.items() if any(pk in k for pk in PROFILE_KEYS)}
-    for k, v in fields.items():
-        if "ポジション" in k or k == "Position":
-            prof["position"] = v
-        if "背番号" in k:
-            prof["number"] = re.sub(r"\D", "", v) or v
-    if "number" not in prof:
-        m = re.search(r"背番号\s*[:：]?\s*(\d{1,3})", clean(soup.get_text(" ")))
-        if m:
-            prof["number"] = m.group(1)
-    for img in soup.find_all("img", src=True):
-        src = img["src"]
-        if re.search(r"logo|icon|banner|btn|arrow|common/|sns", src, re.I):
-            continue
-        if re.search(r"player|photo|/\d{6,}", src, re.I):
-            prof["photo"] = requests.compat.urljoin(prof["url"], src)
-            break
+    prof["fields"] = fields
+    if fields.get("ポジション"):
+        prof["position"] = fields["ポジション"]
     prof["fetched"] = now_jst().date().isoformat()
     return prof
 
 
-def update_profiles(games, year, limit=None):
-    """抓取本季新出現的選手個人資料（每位選手只抓一次，存在 data/players/{id}.json）。"""
-    pids = set()
-    gdir = os.path.join(DATA, str(year), "games")
-    for g in games:
-        if not g.get("hasBox"):
-            continue
-        box = read_json(os.path.join(gdir, f"{g['id']}.json")) or {}
-        for t in box.get("teams", {}).values():
-            for kind in ("batting", "pitching"):
-                pids.update(x for x in ((t.get(kind) or {}).get("pids") or []) if x)
+def update_profiles(pids, limit=None):
+    """抓取尚未存檔的選手個人資料（每位選手只抓一次）。"""
     n = 0
     for pid in sorted(pids):
         path = os.path.join(DATA, "players", f"{pid}.json")
@@ -744,8 +848,173 @@ def update_profiles(games, year, limit=None):
         if html:
             write_json(path, parse_profile(html, pid), pretty=True)
     if n:
-        print(f"{year}: fetched {n} player profiles")
+        print(f"profiles: fetched {n}")
     return n
+
+
+def name_index():
+    """全名（去空白）→ 選手 ID，來源：已存的選手個人資料。"""
+    idx = {}
+    pdir = os.path.join(DATA, "players")
+    if os.path.isdir(pdir):
+        for f in os.listdir(pdir):
+            p = read_json(os.path.join(pdir, f)) or {}
+            if p.get("fullName"):
+                idx.setdefault(nospace(p["fullName"]), p["id"])
+    return idx
+
+
+# ---------------------------------------------------------------- 選手頁資料：年度成績、逐場紀錄
+
+# 逐場紀錄欄位：代碼 → 單場表頭（可多個寫法）
+BAT_LOG = {"AB": ("打数",), "R": ("得点",), "H": ("安打",), "RBI": ("打点",), "HR": ("本塁打",),
+           "BB": ("四球",), "HBP": ("死球",), "SO": ("三振",), "SB": ("盗塁",)}
+PIT_LOG = {"NP": ("投球数",), "BF": ("打者",), "H": ("安打",), "HR": ("本塁打",), "BB": ("四球",),
+           "HBP": ("死球",), "SO": ("三振",), "R": ("失点",), "ER": ("自責点", "自責")}
+TOTAL_ROWS = {"チーム計", "計", "合計"}
+
+
+def player_key(pid, team, name):
+    """有 npb.jp 選手 ID 就用 ID；否則用「隊伍_全名」。"""
+    return pid if pid else f"{team}_{nospace(name)}"
+
+
+def match_name(short, fulls):
+    """單場成績表的簡稱（例：岡本、中村悠）對應年度成績的全名（岡本 和真、中村 悠平）。"""
+    s = nospace(short)
+    exact = [f for f in fulls if nospace(f) == s]
+    if exact:
+        return exact[0]
+    hits = []
+    for f in fulls:
+        parts = clean(f).split(" ")
+        sur, given = parts[0], "".join(parts[1:])
+        if s == sur or (s.startswith(sur) and len(s) > len(sur) and given.startswith(s[len(sur):])):
+            hits.append(f)
+    return hits[0] if len(hits) == 1 else None
+
+
+def box_pids(year, games):
+    pids = set()
+    gdir = os.path.join(DATA, str(year), "games")
+    for g in games:
+        if g.get("hasBox"):
+            box = read_json(os.path.join(gdir, f"{g['id']}.json")) or {}
+            for t in box.get("teams", {}).values():
+                for kind in ("batting", "pitching"):
+                    pids.update(x for x in ((t.get(kind) or {}).get("pids") or []) if x)
+    return pids
+
+
+def pick(h, r, names):
+    for n in names:
+        if n in h and h.index(n) < len(r):
+            return num(r[h.index(n)])
+    return None
+
+
+def bat_line(h, r):
+    vals = {k: pick(h, r, v) for k, v in BAT_LOG.items()}
+    # /scores/ 頁面沒有四球、三振欄，改由每打席結果推算
+    inn = [r[i] for i in range(len(h)) if i < len(r) and re.fullmatch(r"\d+", h[i] or "")]
+    if inn:
+        for k, word in (("BB", "四球"), ("HBP", "死球"), ("SO", "三振"), ("HR", "本")):
+            if vals[k] is None:
+                vals[k] = sum(nospace(c).count(word) if word != "本" else ("本" in c) for c in inn)
+    return [vals[k] for k in BAT_LOG]
+
+
+def build_players(year, games, stats):
+    idx = name_index()
+    stats = stats or {"batting": [], "pitching": []}
+    fulls = {}
+    for kind in ("batting", "pitching"):
+        for p in stats[kind]:
+            pid = idx.get(nospace(p["name"]))
+            p["key"] = player_key(pid, p["team"], p["name"])
+            if pid:
+                p["id"] = pid
+            fulls.setdefault(p["team"], set()).add(p["name"])
+
+    names, logs, short_ids = {}, {}, {}
+    gdir = os.path.join(DATA, str(year), "games")
+    for g in games:
+        if not g.get("hasBox") or g["stage"] == "allstar":
+            continue
+        box = read_json(os.path.join(gdir, f"{g['id']}.json"))
+        if not box:
+            continue
+        for team, t in box.get("teams", {}).items():
+            opp = g["home"] if team == g["away"] else g["away"]
+            ha = "A" if team == g["away"] else "H"
+            for kind in ("batting", "pitching"):
+                tb = t.get(kind)
+                if not tb or not tb.get("headers"):
+                    continue
+                h = tb["headers"]
+                nm_col = "投手" if kind == "pitching" else "選手"
+                if nm_col not in h:
+                    continue
+                ni = h.index(nm_col)
+                pids = tb.get("pids") or []
+                for ri, r in enumerate(tb["rows"]):
+                    short = r[ni] if ni < len(r) else ""
+                    if not short or short in TOTAL_ROWS:
+                        continue
+                    pid = pids[ri] if ri < len(pids) else None
+                    full = None
+                    if pid:
+                        prof = read_json(os.path.join(DATA, "players", f"{pid}.json")) or {}
+                        full = prof.get("fullName")
+                    full = full or match_name(short, fulls.get(team, ()))
+                    if not pid and full:
+                        pid = idx.get(nospace(full))
+                    if pid:
+                        short_ids[(team, nospace(short))] = pid
+                    key = player_key(pid, team, full or short)
+                    names.setdefault(team, {})[short] = key
+                    lg = logs.setdefault(key, {"key": key, "id": pid, "name": full or short, "team": team,
+                                               "bat": [], "pit": []})
+                    base = [g["id"], g["date"], opp, ha, g["stage"]]
+                    if kind == "batting":
+                        pos = r[h.index("守備")] if "守備" in h and h.index("守備") < len(r) else ""
+                        lg["bat"].append(base + [pos] + bat_line(h, r))
+                    else:
+                        ip_i = h.index("投球回") if "投球回" in h else None
+                        outs = 0
+                        if ip_i is not None and ip_i < len(r):
+                            outs = innings_to_outs(r[ip_i])
+                            nxt = r[ip_i + 1] if ip_i + 1 < len(r) and h[ip_i + 1] == "" else ""
+                            if re.fullmatch(r"\.\d", nxt):
+                                outs += int(nxt[1])
+                        dec = next((DECISION_MARKS[c] for c in r[:ni] if c in DECISION_MARKS), "")
+                        lg["pit"].append(base + [outs] + [pick(h, r, v) for v in PIT_LOG.values()] + [dec])
+
+    # 官方成績表沒有 ID → 以「隊伍＋全名」或「隊伍＋單場表上的名字」（外籍、登錄名選手）對應逐場紀錄的 ID
+    by_name = {(lg["team"], nospace(lg["name"])): lg["id"] for lg in logs.values() if lg.get("id")}
+    for kind in ("batting", "pitching"):
+        for p in stats[kind]:
+            if not p.get("id"):
+                k = (p["team"], nospace(p["name"]))
+                pid = by_name.get(k) or short_ids.get(k)
+                if pid:
+                    p["id"] = p["key"] = pid
+            if p.get("id"):
+                prof = read_json(os.path.join(DATA, "players", f"{p['id']}.json")) or {}
+                for k in ("photo", "kana", "number", "position"):
+                    if prof.get(k):
+                        p[k] = prof[k]
+                if logs.get(p["id"]):
+                    logs[p["id"]]["name"] = p["name"]
+
+    pdir = os.path.join(DATA, str(year), "players")
+    for key, lg in logs.items():
+        lg["batCols"] = ["POS"] + list(BAT_LOG)
+        lg["pitCols"] = ["OUTS"] + list(PIT_LOG) + ["DEC"]
+        write_json(os.path.join(pdir, f"{key}.json"), lg)
+    write_json(os.path.join(DATA, str(year), "names.json"), names)
+    return {"year": year, "official": bool(stats["batting"] or stats["pitching"]),
+            "batting": stats["batting"], "pitching": stats["pitching"]}
 
 
 # ---------------------------------------------------------------- 主流程
@@ -764,10 +1033,11 @@ def update_season(year, force=False, max_boxes=None, boxes=True):
         print(f"{year}: no games found")
         return old
 
-    # 未賽的比賽補場地（只看還有未賽比賽的月份）
-    pending_months = sorted({g["date"][5:7] for g in games if g["status"] == "scheduled"})
-    if pending_months:
-        enrich_venues(year, games, pending_months)
+    # 日文賽程頁：各場 /scores/ 路徑（單場成績來源）、未賽的場地與預告先發
+    months = sorted({g["date"][5:7] for g in games
+                     if g["status"] == "scheduled" or (g["status"] == "final" and not g.get("hasBox"))})
+    if months:
+        enrich_schedule(year, games, months)
 
     fetched = 0
     gdir = os.path.join(ydir, "games")
@@ -800,28 +1070,29 @@ def update_season(year, force=False, max_boxes=None, boxes=True):
         if not g.get("venue") and g["home"] in TEAMS and g["stage"] != "allstar":
             g["venue"], g["venueSource"] = TEAMS[g["home"]]["home"], "home"
 
-    today = now_jst().date().isoformat()
-    complete = (year < now_jst().year
+    # 年度個人成績（官方）與選手個人資料（照片、全名…，每位選手只抓一次）
+    stats = fetch_official_stats(year)
+    if boxes:
+        update_profiles(box_pids(year, games), limit=max_boxes)
+    players = build_players(year, games, stats)
+    write_json(os.path.join(ydir, "players.json"), players)
+
+    complete = (year < now_jst().year and stats is not None
                 and all(g["status"] != "scheduled" for g in games)
                 and all(g["hasBox"] for g in games if g["status"] == "final" and g["id"].isdigit()))
-    out = {"year": year, "updated": now_jst().isoformat(timespec="minutes"),
-           "complete": complete, "games": games}
-    changed = write_json(sched_path, out, pretty=False)
-    profiles = update_profiles(games, year, limit=max_boxes) if boxes else 0
-    if changed or profiles or not os.path.exists(os.path.join(ydir, "players.json")):
-        out_players = build_players(year, games)
-        write_json(os.path.join(ydir, "players.json"), out_players)
-    else:
-        # 沒變化時保留原 updated 時間
-        out = read_json(sched_path, out)
+    prev_games = old.get("games")
+    out = {"year": year, "updated": old.get("updated"), "complete": complete, "games": games}
+    if prev_games != games or old.get("complete") != complete or not old.get("updated"):
+        out["updated"] = now_jst().isoformat(timespec="minutes")
+    write_json(sched_path, out)
     nf = sum(g["status"] == "final" for g in games)
-    print(f"{year}: {len(games)} games, {nf} final, complete={complete}, boxes fetched={fetched}, today={today}")
+    print(f"{year}: {len(games)} games, {nf} final, complete={complete}, boxes fetched={fetched}")
     return out
 
 
 def update_index(years_touched):
     path = os.path.join(DATA, "seasons.json")
-    idx = {s["year"]: s for s in (read_json(path, {}) or {}).get("seasons", [])}
+    idx = {}
     for y in os.listdir(DATA) if os.path.isdir(DATA) else []:
         if not y.isdigit():
             continue
@@ -844,7 +1115,8 @@ def parse_years(spec):
             years.add(now_jst().year)
         elif "-" in part:
             a, b = part.split("-", 1)
-            years.update(range(int(a), int(b) + 1))
+            b = now_jst().year if b.strip() == "current" else int(b)
+            years.update(range(int(a), b + 1))
         else:
             years.add(int(part))
     return sorted(years, reverse=True)
@@ -853,9 +1125,9 @@ def parse_years(spec):
 def main(argv=None):
     ap = argparse.ArgumentParser(description="NPB data scraper")
     ap.add_argument("--seasons", default="current",
-                    help="例：current、2025、2018-2024、2023,current")
+                    help="例：current、2025、2018-2024、2015-current、2023,current")
     ap.add_argument("--force", action="store_true", help="忽略快取全部重抓")
-    ap.add_argument("--max-boxes", type=int, default=None, help="本次最多抓幾場單場成績")
+    ap.add_argument("--max-boxes", type=int, default=None, help="本次最多抓幾場單場成績（與選手資料）")
     ap.add_argument("--no-boxes", action="store_true", help="只抓賽程")
     args = ap.parse_args(argv)
 
