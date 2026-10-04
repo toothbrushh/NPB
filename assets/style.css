@@ -262,3 +262,50 @@ tr.total td { font-weight: 700; background: var(--panel-2); }
 .about .lead { font-size: 16px; font-weight: 700; padding: 14px 16px; background: var(--panel); border-left: 4px solid var(--accent); border-radius: 8px; }
 .about h3 { margin-top: 22px; }
 .about li { margin-bottom: 6px; }
+
+/* 季後賽樹狀對戰圖：央聯在左、洋聯在右（鏡像），中間日本一系列賽 */
+.bracket { display: grid; grid-template-columns: 1fr minmax(240px, 300px) 1fr; gap: 18px; align-items: center; }
+.bside .blabel { font-weight: 800; margin-bottom: 10px; display: flex; align-items: center; gap: 8px; }
+.bside.right .blabel { justify-content: flex-end; }
+.bcols { display: grid; grid-template-columns: 1fr 1fr; gap: 26px; align-items: center; }
+.bside.right .bcols { direction: rtl; }
+.bside.right .bcols > * { direction: ltr; }
+.bcol { position: relative; }
+/* 連接線：第一階段 → 最終階段 → 日本一 */
+.bcol.first::after, .bcol.final::after { content: ""; position: absolute; top: 50%; width: 26px; border-top: 2px solid var(--line); }
+.bside.left .bcol::after { right: -26px; }
+.bside.right .bcol::after { left: -26px; }
+.bcol.final::after { width: 18px; }
+.bside.left .bcol.final::after { right: -18px; }
+.bside.right .bcol.final::after { left: -18px; }
+.bbox { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 10px; }
+.bbox.js { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.bhead { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; font-weight: 800; font-size: 13px; margin-bottom: 6px; }
+.bhead small { color: var(--muted); font-weight: 500; font-size: 11px; }
+.bt { display: flex; align-items: center; gap: 6px; padding: 5px 4px; border-top: 1px solid var(--line); }
+.bt .nm { flex: 1; font-weight: 700; text-decoration: none; }
+.bt b { font-size: 20px; font-variant-numeric: tabular-nums; min-width: 22px; text-align: right; }
+.bt .seed { font-size: 10px; color: var(--muted); min-width: 22px; }
+.bt .adv { font-size: 10px; color: var(--accent-2); border: 1px solid var(--accent-2); border-radius: 4px; padding: 0 3px; }
+.bt.win .nm, .bt.win b { color: var(--win); }
+.bt.out { opacity: .45; }
+.bt.tbd .nm { color: var(--muted); font-weight: 500; }
+.bgames { margin-top: 6px; font-size: 12px; }
+.bgames summary { cursor: pointer; color: var(--muted); }
+.bgames .series-games { margin-top: 6px; flex-direction: column; }
+.sg.nobox { cursor: default; }
+.bcenter { display: flex; flex-direction: column; gap: 14px; }
+.trophy { text-align: center; padding: 14px; border-radius: 14px; background: var(--panel); border: 1px dashed var(--line); }
+.trophy.done { border: 2px solid #d4a017; background: linear-gradient(180deg, color-mix(in srgb, #d4a017 22%, var(--panel)), var(--panel)); }
+.trophy .cup { font-size: 34px; }
+.trophy .label { font-weight: 900; letter-spacing: 4px; margin-bottom: 6px; }
+.trophy .champ { display: flex; flex-direction: column; align-items: center; gap: 6px; font-weight: 900; font-size: 18px; }
+.notice { background: var(--panel); border-left: 4px solid var(--accent); padding: 10px 14px; border-radius: 8px; }
+@media (max-width: 1000px) {
+  .bracket { grid-template-columns: 1fr; }
+  .bcenter { order: 2; } .bside.right { order: 3; }
+  .bside.right .blabel { justify-content: flex-start; }
+  .bside.right .bcols { direction: ltr; }
+  .bcol::after { display: none; }
+}
+@media (max-width: 560px) { .bcols { grid-template-columns: 1fr; gap: 10px; } }
