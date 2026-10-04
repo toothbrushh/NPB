@@ -1,6 +1,33 @@
-# NPB 日本職棒賽程戰績
+# ⚾ NPB 日本職棒賽程戰績
 
-日本職棒（NPB）各年度的賽程、比分、戰績與單場球員數據網頁，介面風格參考 F1 官網的賽季頁。
+日本職棒（NPB）各年度的賽程、比分、戰績與單場球員數據網站，介面風格參考 F1 官網的賽季頁。資料每天自動更新，過去年度抓完即封存。
+
+### 👉 [立即瀏覽網站：toothbrushh.github.io/NPB](https://toothbrushh.github.io/NPB/)
+
+> 本站為球迷自製的獨立非營利網站，與日本野球機構（NPB）及各球團官方無關，亦未獲其授權或背書。詳見[著作權與免責聲明](#著作權與免責聲明)。
+
+| 賽程（下一場倒數、預告先發） | 戰績與貯金走勢 |
+|:---:|:---:|
+| [![賽程](docs/screenshots/schedule.jpg)](https://toothbrushh.github.io/NPB/#/2026/schedule) | [![戰績](docs/screenshots/standings.jpg)](https://toothbrushh.github.io/NPB/#/2026/standings) |
+| **單場數據（逐局比分、每打席結果）** | **季後賽（2025 高潮系列賽、日本一系列賽）** |
+| [![單場數據](docs/screenshots/game.jpg)](https://toothbrushh.github.io/NPB/#/2026/schedule) | [![季後賽](docs/screenshots/postseason.jpg)](https://toothbrushh.github.io/NPB/#/2025/postseason) |
+| **個人成績（NPB 官方年度成績）** | **球隊頁（球隊故事、出賽球員）** |
+| [![個人成績](docs/screenshots/players.jpg)](https://toothbrushh.github.io/NPB/#/2025/players) | [![球隊](docs/screenshots/team.jpg)](https://toothbrushh.github.io/NPB/#/2026/teams/T) |
+
+<p align="center"><img src="docs/screenshots/mobile.jpg" width="260" alt="手機版畫面"><br><sub>手機版</sub></p>
+
+### 快速連結
+
+| 頁面 | 連結 |
+|---|---|
+| 2026 賽程 | https://toothbrushh.github.io/NPB/#/2026/schedule |
+| 2026 戰績 | https://toothbrushh.github.io/NPB/#/2026/standings |
+| 2025 季後賽 | https://toothbrushh.github.io/NPB/#/2025/postseason |
+| 2026 個人成績 | https://toothbrushh.github.io/NPB/#/2026/players |
+| 球隊（以阪神為例） | https://toothbrushh.github.io/NPB/#/2026/teams/T |
+| 關於本站／免責聲明 | https://toothbrushh.github.io/NPB/#/2026/about |
+
+目前收錄年度：2025（已封存）、2026（每日更新）。要補抓其他年度見下方[使用方式](#使用方式)。
 
 ## 功能
 

@@ -91,6 +91,7 @@ async function route() {
     a.classList.toggle('active', a.dataset.tab === (state.tab === 'player' ? 'players' : state.tab));
     a.href = `#/${year}/${a.dataset.tab}`;
   });
+  if (h.tab !== 'game' && $('#game-dialog').open) $('#game-dialog').close();
   render();
   if (h.tab === 'game' && h.extra) openGame(h.extra);
 }
