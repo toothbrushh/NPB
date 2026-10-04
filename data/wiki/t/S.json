@@ -6,12 +6,6 @@
  "method": "excerpt",
  "license": "CC BY-SA 4.0",
  "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0/deed.zh-hant",
- "photo": {
-  "src": "https://thumb.wikimedia.org/wikipedia/commons/thumb/8/8d/Tokyo_Yakult_Swallows_insignia.svg/500px-Tokyo_Yakult_Swallows_insignia.svg.png?utm_source=zh.wikipedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
-  "page": "https://commons.wikimedia.org/wiki/File:Tokyo_Yakult_Swallows_insignia.svg",
-  "artist": "原作者： RandyFitz 向量： ヒッパソス",
-  "license": "Public domain",
-  "licenseUrl": null
- },
+ "photo": null,
  "fetched": "2026-10-04"
 }

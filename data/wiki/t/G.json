@@ -6,12 +6,6 @@
  "method": "excerpt",
  "license": "CC BY-SA 4.0",
  "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0/deed.zh-hant",
- "photo": {
-  "src": "https://thumb.wikimedia.org/wikipedia/commons/thumb/f/f5/Yomiuri_Giants_logo.svg/500px-Yomiuri_Giants_logo.svg.png?utm_source=zh.wikipedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
-  "page": "https://commons.wikimedia.org/wiki/File:Yomiuri_Giants_logo.svg",
-  "artist": "Yomiuri Giants",
-  "license": "Public domain",
-  "licenseUrl": null
- },
+ "photo": null,
  "fetched": "2026-10-04"
 }

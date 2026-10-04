@@ -6,12 +6,6 @@
  "method": "excerpt",
  "license": "CC BY-SA 4.0",
  "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0/deed.zh-hant",
- "photo": {
-  "src": "https://thumb.wikimedia.org/wikipedia/commons/thumb/d/de/Yokohama_DeNA_BayStars_insignia.png/500px-Yokohama_DeNA_BayStars_insignia.png?utm_source=zh.wikipedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
-  "page": "https://commons.wikimedia.org/wiki/File:Yokohama_DeNA_BayStars_insignia.png",
-  "artist": "未知Unknown author",
-  "license": "Public domain",
-  "licenseUrl": null
- },
+ "photo": null,
  "fetched": "2026-10-04"
 }

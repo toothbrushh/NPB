@@ -6,12 +6,6 @@
  "method": "excerpt",
  "license": "CC BY-SA 4.0",
  "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0/deed.zh-hant",
- "photo": {
-  "src": "https://upload.wikimedia.org/wikipedia/commons/1/1b/Orix_Buffaloes_insignia.png?utm_source=zh.wikipedia.org&utm_campaign=imageinfo&utm_content=thumbnail_unscaled",
-  "page": "https://commons.wikimedia.org/wiki/File:Orix_Buffaloes_insignia.png",
-  "artist": "未知Unknown author",
-  "license": "Public domain",
-  "licenseUrl": null
- },
+ "photo": null,
  "fetched": "2026-10-04"
 }
