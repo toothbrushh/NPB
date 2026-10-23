@@ -9,6 +9,7 @@ NPB 賽程 / 比分 / 個人成績爬蟲。
   * 未賽場地與預告先發：https://npb.jp/games/{年}/schedule_{月}_detail.html
   * 年度個人成績：      https://npb.jp/bis/{年}/stats/idb1_{隊}.html、idp1_{隊}.html
   * 選手個人頁：        https://npb.jp/bis/players/{選手ID}.html
+  * 比分備援：          npb.jp 連不上時，當季改從 Yahoo! スポーツナビ 補比分（見 yahoo_scores.py）
 
 輸出（皆為靜態 JSON，供網頁直接讀取）：
   data/seasons.json                 各年度清單
@@ -37,6 +38,7 @@ from bs4 import BeautifulSoup
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from teams import TEAMS, VENUES, resolve, resolve_ja  # noqa: E402
+from yahoo_scores import update_scores_from_yahoo  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA = os.path.join(ROOT, "data")
@@ -1026,7 +1028,14 @@ def update_season(year, force=False, max_boxes=None, boxes=True):
         return old
 
     print(f"{year}: fetching schedule")
-    games = scrape_schedule(year, old.get("games", []))
+    try:
+        games = scrape_schedule(year, old.get("games", []))
+    except requests.RequestException as e:
+        # npb.jp 連不上：當季改用 Yahoo 補比分；其他年度維持失敗
+        if year != now_jst().year or not old.get("games"):
+            raise
+        print(f"{year}: npb.jp unreachable ({e.__class__.__name__}), falling back to Yahoo scores")
+        return update_season_from_yahoo(year, old, sched_path)
     if not games:
         print(f"{year}: no games found")
         return old
@@ -1085,6 +1094,19 @@ def update_season(year, force=False, max_boxes=None, boxes=True):
     write_json(sched_path, out)
     nf = sum(g["status"] == "final" for g in games)
     print(f"{year}: {len(games)} games, {nf} final, complete={complete}, boxes fetched={fetched}")
+    return out
+
+
+def update_season_from_yahoo(year, old, sched_path):
+    """比分備援：只更新既有賽程的狀態與比分，其餘（單場成績、個人成績）等 npb.jp 恢復再補。"""
+    games = [dict(g) for g in old["games"]]
+    days, changed = update_scores_from_yahoo(games, fetch, now_jst().date())
+    out = dict(old)
+    out["games"] = games
+    if changed:
+        out["updated"] = now_jst().isoformat(timespec="minutes")
+    write_json(sched_path, out)
+    print(f"{year}: Yahoo fallback checked {days} day(s), updated {changed} game(s)")
     return out
 
 
