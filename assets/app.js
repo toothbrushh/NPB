@@ -773,9 +773,10 @@ async function renderPlayer() {
 /* ------------------------------------------------------------ 單場詳細 */
 const HEAD_ZH = { 守備: '守備', 選手: '選手', 打数: '打數', 安打: '安打', 打点: '打點', 四球: '四壞', 死球: '觸身', 三振: '三振',
   得点: '得分', 本塁打: '全壘打', 盗塁: '盜壘', 投手: '投手', 投球回: '局數', 打者: '面對打者', 自責: '自責分', 自責点: '自責分',
-  失点: '失分', 投球数: '用球數', 暴投: '暴投', ボーク: '投手犯規' };
+  失点: '失分', 投球数: '用球數', 暴投: '暴投', ボーク: '投手犯規', 犠打: '犧觸', 失策: '失誤' };
 // 每打席結果（日文記號）→ 中文
-const PLAY_ZH = [['四球', '四壞'], ['死球', '觸身'], ['犠打', '犧觸'], ['犠飛', '犧飛'], ['併殺', '雙殺'], ['邪飛', '界外飛'],
+const PLAY_ZH = [['四球', '四壞'], ['死球', '觸身'], ['犠打', '犧觸'], ['犠飛', '犧飛'], ['併殺', '雙殺'], ['併打', '雙殺打'],
+  ['邪飛', '界外飛'], ['空三振', '揮空三振'], ['見三振', '站著三振'], ['故意四', '故意四壞'], ['敬遠四', '故意四壞'],
   ['ゴロ', '滾'], ['遊', '游'], ['失', '失誤'], ['野選', '野選'], ['打妨', '妨礙打擊'], ['振逃', '不死三振']];
 const playZh = v => {
   let t = String(v || '').replace(/\s+/g, '');
@@ -784,6 +785,15 @@ const playZh = v => {
   return t.replace(/本([①-⑳]?)/, '全壘打$1').replace(/安$/, '安打');
 };
 const MARK_ZH = { '○': '勝', '●': '敗', S: '救援', H: '中繼', 'Ｓ': '救援', 'Ｈ': '中繼' };
+// 投球局數：'7'、'0 .2'、'6.1'（同格）或 '7' + '.2' / '+'（分數另一欄）→ '7'、'2/3'、'6 1/3'、'7+'
+const ipText = (v, frac = '') => {
+  const s = String(v ?? '').trim();
+  const f = String(frac).trim();
+  if (f === '+') return `${s || 0}+`;
+  const m = /^(\d*)\s*\.([12])$/.exec(f ? `${s} ${f}` : s);
+  if (m) return +m[1] ? `${+m[1]} ${m[2]}/3` : `${m[2]}/3`;
+  return s.replace(/\s*\.0$/, '');
+};
 
 async function openGame(id) {
   const g = state.sched.games.find(x => x.id === id);
@@ -820,10 +830,7 @@ async function openGame(id) {
         const hit = /安|全壘打|二$|三$/.test(z);
         return `<span class="play ${hit ? 'hit' : ''}" title="${esc(v)}">${esc(z)}</span>`;
       }
-      if (i === ipi) {
-        const f = r[ipi + 1] || '';
-        return esc(f === '+' ? `${v || 0}+` : f ? `${v || 0} ${f.replace('.', '')}/3` : v);
-      }
+      if (i === ipi) return esc(ipText(v, skip.has(ipi + 1) ? r[ipi + 1] || '' : ''));
       if (pitching && i < ni) return esc(MARK_ZH[v] || v);
       if (!pitching && h[i] === '守備') return esc(posZh(v));
       return esc(v);
@@ -856,6 +863,7 @@ async function openGame(id) {
     ${info.homeRuns ? `<p><b>全壘打：</b>${esc(info.homeRuns)}</p>` : ''}
     ${tbl(box.teams?.[aw]?.batting, `${team(aw).s} 打擊`, aw)}${tbl(box.teams?.[hm]?.batting, `${team(hm).s} 打擊`, hm)}
     ${tbl(box.teams?.[aw]?.pitching, `${team(aw).s} 投手`, aw, true)}${tbl(box.teams?.[hm]?.pitching, `${team(hm).s} 投手`, hm, true)}
+    ${box.provisional ? '<p class="notice">npb.jp 暫時無法連線，此場數據暫取自 Yahoo! スポーツナビ 的速報值；官方網站恢復後會自動換成正式紀錄。</p>' : ''}
     ${box.source ? `<p class="muted small">來源：<a href="${esc(box.source)}" target="_blank" rel="noopener">${esc(box.source)}</a></p>` : ''}`;
 }
 

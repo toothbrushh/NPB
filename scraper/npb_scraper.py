@@ -38,7 +38,8 @@ from bs4 import BeautifulSoup
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from teams import TEAMS, VENUES, resolve, resolve_ja  # noqa: E402
-from yahoo_scores import update_scores_from_yahoo  # noqa: E402
+from yahoo_scores import YAHOO_GAME, parse_yahoo_box, update_scores_from_yahoo  # noqa: E402
+from yahoo_scores import needs_box as yahoo_needs_box  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA = os.path.join(ROOT, "data")
@@ -1053,19 +1054,24 @@ def update_season(year, force=False, max_boxes=None, boxes=True):
             continue
         path = os.path.join(gdir, f"{g['id']}.json")
         box = read_json(path)
-        if box and box.get("schema") == BOX_SCHEMA and not force:
+        if box and box.get("schema") == BOX_SCHEMA and not box.get("provisional") and not force:
             g["hasBox"] = True
         else:
             if max_boxes is not None and fetched >= max_boxes:
                 continue
             fetched += 1
-            box = scrape_box(year, g)
+            # 暫時的 Yahoo 資料（provisional）：npb.jp 有官方單場成績就取代，否則先保留
+            prov = box if box and box.get("provisional") else None
+            box = scrape_box(year, g) or prov
             if not box:
                 print(f"  box {g['id']}: not available")
                 continue
-            write_json(path, box)
             g["hasBox"] = True
-            print(f"  box {g['id']} {g['away']}@{g['home']} saved")
+            if box is prov:
+                print(f"  box {g['id']}: official box not available yet, keeping Yahoo data")
+            else:
+                write_json(path, box)
+                print(f"  box {g['id']} {g['away']}@{g['home']} saved")
         info = box.get("info", {})
         if info.get("venue"):
             g["venue"], g["venueSource"] = info["venue"], "box"
@@ -1097,16 +1103,66 @@ def update_season(year, force=False, max_boxes=None, boxes=True):
     return out
 
 
+def yahoo_name_resolver(year):
+    """Yahoo 單場表的全名 → (顯示名, npb.jp 選手 ID)。顯示名盡量沿用 npb.jp 單場表上的簡稱。"""
+    idx = name_index()
+    names = read_json(os.path.join(DATA, str(year), "names.json"), {}) or {}
+    if not isinstance(names, dict):
+        names = {}
+    names = {t: m for t, m in names.items() if isinstance(m, dict)}
+    short_of = {(team, key): short for team, m in names.items() for short, key in m.items()}
+
+    def resolve_name(team, full):
+        pid = idx.get(nospace(full)) or (names.get(team) or {}).get(nospace(full))
+        if pid and not pid.isdigit():  # names.json 的 key 可能是「隊伍_全名」而非 ID
+            pid = None
+        short = short_of.get((team, pid)) if pid else None
+        return (short or clean(full)), pid
+    return resolve_name
+
+
+def yahoo_boxes(year, games):
+    """為已賽但沒有單場成績的比賽，從 Yahoo 抓單場成績（暫時資料）；回傳新存的場數。"""
+    resolve_name = None
+    saved = 0
+    gdir = os.path.join(DATA, str(year), "games")
+    for g in games:
+        if not yahoo_needs_box(g) or not g.get("yahooId"):
+            continue
+        resolve_name = resolve_name or yahoo_name_resolver(year)
+        try:
+            stats = fetch(YAHOO_GAME.format(yid=g["yahooId"], page="stats"))
+            index = fetch(YAHOO_GAME.format(yid=g["yahooId"], page="index"))
+        except Exception as e:  # noqa: BLE001
+            print(f"  yahoo box {g['id']} failed: {e}")
+            continue
+        box = parse_yahoo_box(stats, index, g, resolve_name)
+        if not box["ok"]:
+            print(f"  yahoo box {g['id']}: incomplete, skipped")
+            continue
+        box["schema"] = BOX_SCHEMA
+        box["source"] = YAHOO_GAME.format(yid=g["yahooId"], page="stats")
+        write_json(os.path.join(gdir, f"{g['id']}.json"), box)
+        g["hasBox"] = True
+        for k in ("attendance", "duration", "winP", "loseP", "saveP"):
+            if box["info"].get(k) is not None:
+                g[k] = box["info"][k]
+        saved += 1
+        print(f"  yahoo box {g['id']} {g['away']}@{g['home']} saved")
+    return saved
+
+
 def update_season_from_yahoo(year, old, sched_path):
-    """比分備援：只更新既有賽程的狀態與比分，其餘（單場成績、個人成績）等 npb.jp 恢復再補。"""
+    """備援：從 Yahoo 更新既有賽程的狀態、比分與單場成績；年度個人成績、選手資料等 npb.jp 恢復再補。"""
     games = [dict(g) for g in old["games"]]
     days, changed = update_scores_from_yahoo(games, fetch, now_jst().date())
+    boxes = yahoo_boxes(year, games)
     out = dict(old)
     out["games"] = games
-    if changed:
+    if changed or boxes:
         out["updated"] = now_jst().isoformat(timespec="minutes")
     write_json(sched_path, out)
-    print(f"{year}: Yahoo fallback checked {days} day(s), updated {changed} game(s)")
+    print(f"{year}: Yahoo fallback checked {days} day(s), updated {changed} game(s), {boxes} box(es)")
     return out
 
 
